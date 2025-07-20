@@ -43,3 +43,6 @@ target/
 
 # VS Code
 .vscode/
+
+# Secrets
+.env

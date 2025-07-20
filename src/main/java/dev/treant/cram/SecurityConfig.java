@@ -20,7 +20,7 @@ public class SecurityConfig {
                         .userInfoEndpoint(info -> info
                                 .userService(oAuth2UserService)
                         )
-                        .defaultSuccessUrl("/me", true)
+                        .defaultSuccessUrl("http://localhost:3000/profile", true)
                 );
         return http.build();
     }

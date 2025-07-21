@@ -1,4 +1,4 @@
-package dev.treant.cram;
+package dev.treant.cram.config;
 
 import dev.treant.cram.security.OAuth2UserService;
 import org.springframework.context.annotation.Bean;
@@ -20,7 +20,7 @@ public class SecurityConfig {
                         .userInfoEndpoint(info -> info
                                 .userService(oAuth2UserService)
                         )
-                        .defaultSuccessUrl("/me", true)
+                        .defaultSuccessUrl("http://localhost:3000/profile", true)
                 );
         return http.build();
     }

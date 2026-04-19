@@ -3,3 +3,4 @@ bin/
 api
 *.test
 .idea/
+.DS_Store

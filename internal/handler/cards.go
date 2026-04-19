@@ -40,7 +40,17 @@ func handleErr(w http.ResponseWriter, err error) {
 	http.Error(w, "internal error", http.StatusInternalServerError)
 }
 
-// POST /sets
+// CreateSet godoc
+// @Summary      Create a study set
+// @Tags         sets
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body body object{title=string,description=string} true "Set data"
+// @Success      201 {object} model.StudySet
+// @Failure      400 {string} string
+// @Failure      500 {string} string
+// @Router       /sets [post]
 func (h *CardsHandler) CreateSet(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Title       string `json:"title"`
@@ -58,7 +68,14 @@ func (h *CardsHandler) CreateSet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, set)
 }
 
-// GET /sets
+// ListSets godoc
+// @Summary      List study sets
+// @Tags         sets
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200 {array}  model.StudySet
+// @Failure      500 {string} string
+// @Router       /sets [get]
 func (h *CardsHandler) ListSets(w http.ResponseWriter, r *http.Request) {
 	sets, err := h.svc.ListSets(r.Context(), h.claims(r).UserID)
 	if err != nil {
@@ -68,7 +85,15 @@ func (h *CardsHandler) ListSets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sets)
 }
 
-// GET /sets/{setID}
+// GetSet godoc
+// @Summary      Get a study set with cards and test questions
+// @Tags         sets
+// @Produce      json
+// @Security     BearerAuth
+// @Param        setID path string true "Set ID"
+// @Success      200 {object} model.StudySet
+// @Failure      404 {string} string
+// @Router       /sets/{setID} [get]
 func (h *CardsHandler) GetSet(w http.ResponseWriter, r *http.Request) {
 	set, err := h.svc.GetSet(r.Context(), chi.URLParam(r, "setID"), h.claims(r).UserID)
 	if err != nil {
@@ -78,7 +103,17 @@ func (h *CardsHandler) GetSet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, set)
 }
 
-// PUT /sets/{setID}
+// UpdateSet godoc
+// @Summary      Update a study set
+// @Tags         sets
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        setID path string true "Set ID"
+// @Param        body  body object{title=string,description=string} true "Set data"
+// @Success      200 {object} model.StudySet
+// @Failure      404 {string} string
+// @Router       /sets/{setID} [put]
 func (h *CardsHandler) UpdateSet(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Title       string `json:"title"`
@@ -96,7 +131,14 @@ func (h *CardsHandler) UpdateSet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, set)
 }
 
-// DELETE /sets/{setID}
+// DeleteSet godoc
+// @Summary      Delete a study set
+// @Tags         sets
+// @Security     BearerAuth
+// @Param        setID path string true "Set ID"
+// @Success      204
+// @Failure      404 {string} string
+// @Router       /sets/{setID} [delete]
 func (h *CardsHandler) DeleteSet(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.DeleteSet(r.Context(), chi.URLParam(r, "setID"), h.claims(r).UserID); err != nil {
 		handleErr(w, err)
@@ -105,7 +147,17 @@ func (h *CardsHandler) DeleteSet(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /sets/{setID}/cards
+// AddCard godoc
+// @Summary      Add a flashcard to a set
+// @Tags         cards
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        setID path string true "Set ID"
+// @Param        body  body object{question=string,answer=string,position=int} true "Card data"
+// @Success      201 {object} model.Card
+// @Failure      404 {string} string
+// @Router       /sets/{setID}/cards [post]
 func (h *CardsHandler) AddCard(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string `json:"question"`
@@ -124,7 +176,18 @@ func (h *CardsHandler) AddCard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, card)
 }
 
-// PUT /sets/{setID}/cards/{cardID}
+// UpdateCard godoc
+// @Summary      Update a flashcard
+// @Tags         cards
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        setID  path string true "Set ID"
+// @Param        cardID path string true "Card ID"
+// @Param        body   body object{question=string,answer=string,position=int} true "Card data"
+// @Success      200 {object} model.Card
+// @Failure      404 {string} string
+// @Router       /sets/{setID}/cards/{cardID} [put]
 func (h *CardsHandler) UpdateCard(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string `json:"question"`
@@ -143,7 +206,15 @@ func (h *CardsHandler) UpdateCard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, card)
 }
 
-// DELETE /sets/{setID}/cards/{cardID}
+// DeleteCard godoc
+// @Summary      Delete a flashcard
+// @Tags         cards
+// @Security     BearerAuth
+// @Param        setID  path string true "Set ID"
+// @Param        cardID path string true "Card ID"
+// @Success      204
+// @Failure      404 {string} string
+// @Router       /sets/{setID}/cards/{cardID} [delete]
 func (h *CardsHandler) DeleteCard(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.DeleteCard(r.Context(), chi.URLParam(r, "cardID"), chi.URLParam(r, "setID"), h.claims(r).UserID); err != nil {
 		handleErr(w, err)
@@ -152,8 +223,17 @@ func (h *CardsHandler) DeleteCard(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /sets/{setID}/cards/import
-// CSV format: question,answer
+// ImportCSV godoc
+// @Summary      Bulk import cards from CSV (question,answer)
+// @Tags         cards
+// @Accept       multipart/form-data
+// @Produce      json
+// @Security     BearerAuth
+// @Param        setID path string true "Set ID"
+// @Param        file  formData file true "CSV file"
+// @Success      201 {object} object{imported=int}
+// @Failure      400 {string} string
+// @Router       /sets/{setID}/cards/import [post]
 func (h *CardsHandler) ImportCSV(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(2 << 20); err != nil {
 		http.Error(w, "file too large", http.StatusBadRequest)
@@ -197,7 +277,17 @@ func (h *CardsHandler) ImportCSV(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]int{"imported": len(cards)})
 }
 
-// POST /sets/{setID}/tests
+// AddTestQuestion godoc
+// @Summary      Add a test question to a set
+// @Tags         tests
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        setID path string true "Set ID"
+// @Param        body  body object{question=string,options=[]model.TestOption,position=int} true "Question data"
+// @Success      201 {object} model.TestQuestion
+// @Failure      404 {string} string
+// @Router       /sets/{setID}/tests [post]
 func (h *CardsHandler) AddTestQuestion(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string            `json:"question"`
@@ -216,7 +306,18 @@ func (h *CardsHandler) AddTestQuestion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, tq)
 }
 
-// PUT /sets/{setID}/tests/{tqID}
+// UpdateTestQuestion godoc
+// @Summary      Update a test question
+// @Tags         tests
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        setID path string true "Set ID"
+// @Param        tqID  path string true "Test question ID"
+// @Param        body  body object{question=string,options=[]model.TestOption,position=int} true "Question data"
+// @Success      200 {object} model.TestQuestion
+// @Failure      404 {string} string
+// @Router       /sets/{setID}/tests/{tqID} [put]
 func (h *CardsHandler) UpdateTestQuestion(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string            `json:"question"`
@@ -235,7 +336,15 @@ func (h *CardsHandler) UpdateTestQuestion(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, tq)
 }
 
-// DELETE /sets/{setID}/tests/{tqID}
+// DeleteTestQuestion godoc
+// @Summary      Delete a test question
+// @Tags         tests
+// @Security     BearerAuth
+// @Param        setID path string true "Set ID"
+// @Param        tqID  path string true "Test question ID"
+// @Success      204
+// @Failure      404 {string} string
+// @Router       /sets/{setID}/tests/{tqID} [delete]
 func (h *CardsHandler) DeleteTestQuestion(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.DeleteTestQuestion(r.Context(), chi.URLParam(r, "tqID"), chi.URLParam(r, "setID"), h.claims(r).UserID); err != nil {
 		handleErr(w, err)

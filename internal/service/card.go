@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/treant-dev/cram-go/internal/model"
@@ -11,145 +12,472 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
-type setRepo interface {
-	Create(ctx context.Context, userID, title, description string) (*model.StudySet, error)
-	ListByUser(ctx context.Context, userID string) ([]model.StudySet, error)
-	GetByID(ctx context.Context, id, userID string) (*model.StudySet, error)
-	Update(ctx context.Context, id, userID, title, description string) (*model.StudySet, error)
+// PublicCollectionMeta is a collection enriched with follow data for the market page.
+type PublicCollectionMeta struct {
+	model.Collection
+	FollowerCount int
+	IsFollowed    bool
+}
+
+// UserWithCollections is a user summary with their public collections.
+type UserWithCollections struct {
+	ID          string
+	Name        string
+	Picture     string
+	Role        string
+	Collections []model.Collection
+}
+
+// HomeData is the response for GET /home.
+type HomeData struct {
+	Own       []model.Collection
+	Following []model.Collection
+}
+
+// UpdateDraftReq carries the full content of a draft to be persisted.
+type UpdateDraftReq struct {
+	Title         string
+	Description   string
+	IsPublic      bool
+	Cards         []DraftCard
+	TestQuestions []DraftQuestion
+}
+
+// DraftCard is a card payload for draft updates.
+// ID is the existing draft card UUID; empty means insert as new.
+type DraftCard struct {
+	ID       string
+	Question string
+	Answer   string
+}
+
+// DraftQuestion is a test question payload for draft updates.
+// ID is the existing draft test question UUID; empty means insert as new.
+type DraftQuestion struct {
+	ID       string
+	Question string
+	Options  []model.TestOption
+}
+
+type collectionRepo interface {
+	Create(ctx context.Context, userID, title, description string, isPublic bool) (*model.Collection, error)
+	ListByUser(ctx context.Context, userID string) ([]model.Collection, error)
+	ListPublic(ctx context.Context) ([]model.Collection, error)
+	ListPublicForUsers(ctx context.Context, userIDs []string) (map[string][]model.Collection, error)
+	ListFollowedByUser(ctx context.Context, userID string) ([]model.Collection, error)
+	GetByID(ctx context.Context, id, userID string) (*model.Collection, error)
+	ExistsForUser(ctx context.Context, id, userID string) (bool, error)
+	Update(ctx context.Context, id, userID, title, description string, isPublic bool) (*model.Collection, error)
 	Delete(ctx context.Context, id, userID string) error
+	ForceDelete(ctx context.Context, id string) error
+	// Draft operations
+	GetDraftFor(ctx context.Context, collectionID, userID string) (*model.Collection, error)
+	CreateDraftFrom(ctx context.Context, collectionID, userID string) (*model.Collection, error)
+	UpdateDraftContent(ctx context.Context, draftID, userID, title, description string, isPublic bool, cards []repository.DraftCardInput, tests []repository.DraftTestInput) error
+	PublishDraft(ctx context.Context, collectionID, userID string) error
+	DeleteDraft(ctx context.Context, collectionID, userID string) error
 }
 
 type cardRepo interface {
-	Create(ctx context.Context, setID, question, answer string, position int) (*model.Card, error)
-	ListBySet(ctx context.Context, setID string) ([]model.Card, error)
-	Update(ctx context.Context, id, setID, question, answer string, position int) (*model.Card, error)
-	Delete(ctx context.Context, id, setID string) error
-	BulkCreate(ctx context.Context, setID string, cards []model.Card) error
+	Create(ctx context.Context, collectionID, question, answer string, position int) (*model.Card, error)
+	ListByCollection(ctx context.Context, collectionID string) ([]model.Card, error)
+	Update(ctx context.Context, id, collectionID, question, answer string, position int) (*model.Card, error)
+	Delete(ctx context.Context, id, collectionID string) error
+	BulkCreate(ctx context.Context, collectionID string, cards []model.Card) error
 }
 
 type testQuestionRepo interface {
-	Create(ctx context.Context, setID, question string, options []model.TestOption, position int) (*model.TestQuestion, error)
-	ListBySet(ctx context.Context, setID string) ([]model.TestQuestion, error)
-	Update(ctx context.Context, id, setID, question string, options []model.TestOption, position int) (*model.TestQuestion, error)
-	Delete(ctx context.Context, id, setID string) error
+	Create(ctx context.Context, collectionID, question string, options []model.TestOption, position int) (*model.TestQuestion, error)
+	ListByCollection(ctx context.Context, collectionID string) ([]model.TestQuestion, error)
+	Update(ctx context.Context, id, collectionID, question string, options []model.TestOption, position int) (*model.TestQuestion, error)
+	Delete(ctx context.Context, id, collectionID string) error
 }
 
-type CardService struct {
-	sets          setRepo
+type followRepo interface {
+	Follow(ctx context.Context, userID, collectionID string) error
+	Unfollow(ctx context.Context, userID, collectionID string) error
+	FollowedByUser(ctx context.Context, userID string) (map[string]bool, error)
+	CountsForCollections(ctx context.Context, collectionIDs []string) (map[string]int, error)
+}
+
+type userRepo interface {
+	ListAll(ctx context.Context) ([]model.User, error)
+	UpdateRole(ctx context.Context, userID, role string) error
+}
+
+type studyRepo interface {
+	SubmitSession(ctx context.Context, userID, sessionID, collectionID string, answers []repository.StudyAnswer) error
+	ListCardStats(ctx context.Context, collectionID, userID string) (map[string]model.CardStats, error)
+	ListTQStats(ctx context.Context, collectionID, userID string) (map[string]model.TQStats, error)
+	GetHistory(ctx context.Context, collectionID, userID string, days int) (*repository.StudyHistoryData, error)
+}
+
+type CollectionService struct {
+	collections   collectionRepo
 	cards         cardRepo
 	testQuestions testQuestionRepo
+	follows       followRepo
+	users         userRepo
+	study         studyRepo
 }
 
-func NewCardService(sets *repository.SetRepository, cards *repository.CardRepository, tq *repository.TestQuestionRepository) *CardService {
-	return &CardService{sets: sets, cards: cards, testQuestions: tq}
+func NewCollectionService(
+	collections *repository.CollectionRepository,
+	cards *repository.CardRepository,
+	tq *repository.TestQuestionRepository,
+	follows *repository.FollowRepository,
+	users *repository.UserRepository,
+	study *repository.StudyRepository,
+) *CollectionService {
+	return &CollectionService{
+		collections:   collections,
+		cards:         cards,
+		testQuestions: tq,
+		follows:       follows,
+		users:         users,
+		study:         study,
+	}
 }
 
-func (s *CardService) CreateSet(ctx context.Context, userID, title, description string) (*model.StudySet, error) {
-	return s.sets.Create(ctx, userID, title, description)
+// Collections
+
+func (s *CollectionService) CreateCollection(ctx context.Context, userID, title, description string, isPublic bool) (*model.Collection, error) {
+	return s.collections.Create(ctx, userID, title, description, isPublic)
 }
 
-func (s *CardService) ListSets(ctx context.Context, userID string) ([]model.StudySet, error) {
-	return s.sets.ListByUser(ctx, userID)
+func (s *CollectionService) ListCollections(ctx context.Context, userID string) ([]model.Collection, error) {
+	return s.collections.ListByUser(ctx, userID)
 }
 
-func (s *CardService) GetSet(ctx context.Context, id, userID string) (*model.StudySet, error) {
-	set, err := s.sets.GetByID(ctx, id, userID)
+func (s *CollectionService) GetHome(ctx context.Context, userID string) (*HomeData, error) {
+	own, err := s.collections.ListByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	following, err := s.collections.ListFollowedByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if own == nil {
+		own = []model.Collection{}
+	}
+	if following == nil {
+		following = []model.Collection{}
+	}
+	return &HomeData{Own: own, Following: following}, nil
+}
+
+func (s *CollectionService) ListPublicWithMeta(ctx context.Context, userID string) ([]PublicCollectionMeta, error) {
+	cols, err := s.collections.ListPublic(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(cols) == 0 {
+		return []PublicCollectionMeta{}, nil
+	}
+	ids := make([]string, len(cols))
+	for i, c := range cols {
+		ids[i] = c.ID
+	}
+	counts, err := s.follows.CountsForCollections(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	var followed map[string]bool
+	if userID != "" {
+		followed, err = s.follows.FollowedByUser(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	result := make([]PublicCollectionMeta, len(cols))
+	for i, c := range cols {
+		result[i] = PublicCollectionMeta{
+			Collection:    c,
+			FollowerCount: counts[c.ID],
+			IsFollowed:    followed[c.ID],
+		}
+	}
+	return result, nil
+}
+
+func (s *CollectionService) GetCollection(ctx context.Context, id, userID string) (*model.Collection, error) {
+	col, err := s.collections.GetByID(ctx, id, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	cards, err := s.cards.ListBySet(ctx, id)
+	cards, err := s.cards.ListByCollection(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	tqs, err := s.testQuestions.ListBySet(ctx, id)
+	tqs, err := s.testQuestions.ListByCollection(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	set.Cards = cards
-	set.TestQuestions = tqs
-	return set, nil
+	col.Cards = cards
+	col.TestQuestions = tqs
+
+	// Attach per-user stats (errors are non-fatal; stats are best-effort).
+	if cardStats, err := s.study.ListCardStats(ctx, id, userID); err == nil {
+		for i := range col.Cards {
+			if st, ok := cardStats[col.Cards[i].ID]; ok {
+				col.Cards[i].Stats = &st
+			}
+		}
+	}
+	if tqStats, err := s.study.ListTQStats(ctx, id, userID); err == nil {
+		for i := range col.TestQuestions {
+			if st, ok := tqStats[col.TestQuestions[i].ID]; ok {
+				col.TestQuestions[i].Stats = &st
+			}
+		}
+	}
+
+	// Populate DraftID for the owner so the frontend knows a draft exists.
+	if col.UserID == userID {
+		if draft, err := s.collections.GetDraftFor(ctx, id, userID); err == nil {
+			col.DraftID = &draft.ID
+		}
+	}
+	return col, nil
 }
 
-func (s *CardService) UpdateSet(ctx context.Context, id, userID, title, description string) (*model.StudySet, error) {
-	set, err := s.sets.Update(ctx, id, userID, title, description)
+func (s *CollectionService) SubmitStudySession(ctx context.Context, userID, sessionID, collectionID string, answers []repository.StudyAnswer) error {
+	return s.study.SubmitSession(ctx, userID, sessionID, collectionID, answers)
+}
+
+func (s *CollectionService) GetStudyHistory(ctx context.Context, collectionID, userID string, days int) (*repository.StudyHistoryData, error) {
+	return s.study.GetHistory(ctx, collectionID, userID, days)
+}
+
+func (s *CollectionService) UpdateCollection(ctx context.Context, id, userID, title, description string, isPublic bool) (*model.Collection, error) {
+	col, err := s.collections.Update(ctx, id, userID, title, description, isPublic)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	return set, err
+	return col, err
 }
 
-func (s *CardService) DeleteSet(ctx context.Context, id, userID string) error {
-	return s.sets.Delete(ctx, id, userID)
+func (s *CollectionService) DeleteCollection(ctx context.Context, id, userID string) error {
+	return s.collections.Delete(ctx, id, userID)
 }
 
-func (s *CardService) ownsSet(ctx context.Context, setID, userID string) error {
-	_, err := s.sets.GetByID(ctx, setID, userID)
+func (s *CollectionService) ownsCollection(ctx context.Context, collectionID, userID string) error {
+	exists, err := s.collections.ExistsForUser(ctx, collectionID, userID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Drafts
+
+// GetOrCreateDraft returns the existing draft or creates a new one from the active collection.
+func (s *CollectionService) GetOrCreateDraft(ctx context.Context, collectionID, userID string) (*model.Collection, error) {
+	draft, err := s.collections.GetDraftFor(ctx, collectionID, userID)
+	if err == nil {
+		// Draft already exists — load its content.
+		cards, err := s.cards.ListByCollection(ctx, draft.ID)
+		if err != nil {
+			return nil, err
+		}
+		tests, err := s.testQuestions.ListByCollection(ctx, draft.ID)
+		if err != nil {
+			return nil, err
+		}
+		draft.Cards = cards
+		draft.TestQuestions = tests
+		return draft, nil
+	}
+
+	// Verify ownership before creating.
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return nil, err
+	}
+	draft, err = s.collections.CreateDraftFrom(ctx, collectionID, userID)
+	if err != nil {
+		return nil, err
+	}
+	cards, err := s.cards.ListByCollection(ctx, draft.ID)
+	if err != nil {
+		return nil, err
+	}
+	tests, err := s.testQuestions.ListByCollection(ctx, draft.ID)
+	if err != nil {
+		return nil, err
+	}
+	draft.Cards = cards
+	draft.TestQuestions = tests
+	return draft, nil
+}
+
+// UpdateDraft saves draft content without publishing.
+func (s *CollectionService) UpdateDraft(ctx context.Context, collectionID, userID string, req UpdateDraftReq) error {
+	draft, err := s.collections.GetDraftFor(ctx, collectionID, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	cards := make([]repository.DraftCardInput, len(req.Cards))
+	for i, c := range req.Cards {
+		cards[i] = repository.DraftCardInput{ID: c.ID, Question: c.Question, Answer: c.Answer}
+	}
+	tests := make([]repository.DraftTestInput, len(req.TestQuestions))
+	for i, t := range req.TestQuestions {
+		tests[i] = repository.DraftTestInput{ID: t.ID, Question: t.Question, Options: t.Options}
+	}
+	return s.collections.UpdateDraftContent(ctx, draft.ID, userID, req.Title, req.Description, req.IsPublic, cards, tests)
+}
+
+// DiscardDraft deletes the draft.
+func (s *CollectionService) DiscardDraft(ctx context.Context, collectionID, userID string) error {
+	return s.collections.DeleteDraft(ctx, collectionID, userID)
+}
+
+// PublishDraft promotes the draft to the active version.
+func (s *CollectionService) PublishDraft(ctx context.Context, collectionID, userID string) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	if err := s.collections.PublishDraft(ctx, collectionID, userID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+// Follows
+
+func (s *CollectionService) Follow(ctx context.Context, userID, collectionID string) error {
+	_, err := s.collections.GetByID(ctx, collectionID, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return s.follows.Follow(ctx, userID, collectionID)
+}
+
+func (s *CollectionService) Unfollow(ctx context.Context, userID, collectionID string) error {
+	return s.follows.Unfollow(ctx, userID, collectionID)
+}
+
+// Users
+
+func (s *CollectionService) ListUsers(ctx context.Context) ([]UserWithCollections, error) {
+	users, err := s.users.ListAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(users) == 0 {
+		return []UserWithCollections{}, nil
+	}
+	ids := make([]string, len(users))
+	for i, u := range users {
+		ids[i] = u.ID
+	}
+	colsByUser, err := s.collections.ListPublicForUsers(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]UserWithCollections, len(users))
+	for i, u := range users {
+		cols := colsByUser[u.ID]
+		if cols == nil {
+			cols = []model.Collection{}
+		}
+		result[i] = UserWithCollections{
+			ID:          u.ID,
+			Name:        u.Name,
+			Picture:     u.Picture,
+			Role:        u.Role,
+			Collections: cols,
+		}
+	}
+	return result, nil
 }
 
 // Cards
 
-func (s *CardService) AddCard(ctx context.Context, setID, userID, question, answer string, position int) (*model.Card, error) {
-	if err := s.ownsSet(ctx, setID, userID); err != nil {
+func (s *CollectionService) AddCard(ctx context.Context, collectionID, userID, question, answer string, position int) (*model.Card, error) {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	return s.cards.Create(ctx, setID, question, answer, position)
+	return s.cards.Create(ctx, collectionID, question, answer, position)
 }
 
-func (s *CardService) UpdateCard(ctx context.Context, cardID, setID, userID, question, answer string, position int) (*model.Card, error) {
-	if err := s.ownsSet(ctx, setID, userID); err != nil {
+func (s *CollectionService) UpdateCard(ctx context.Context, cardID, collectionID, userID, question, answer string, position int) (*model.Card, error) {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	card, err := s.cards.Update(ctx, cardID, setID, question, answer, position)
+	card, err := s.cards.Update(ctx, cardID, collectionID, question, answer, position)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return card, err
 }
 
-func (s *CardService) DeleteCard(ctx context.Context, cardID, setID, userID string) error {
-	if err := s.ownsSet(ctx, setID, userID); err != nil {
+func (s *CollectionService) DeleteCard(ctx context.Context, cardID, collectionID, userID string) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	return s.cards.Delete(ctx, cardID, setID)
+	return s.cards.Delete(ctx, cardID, collectionID)
 }
 
-func (s *CardService) ImportCards(ctx context.Context, setID, userID string, cards []model.Card) error {
-	if err := s.ownsSet(ctx, setID, userID); err != nil {
+func (s *CollectionService) ImportCards(ctx context.Context, collectionID, userID string, cards []model.Card) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	return s.cards.BulkCreate(ctx, setID, cards)
+	return s.cards.BulkCreate(ctx, collectionID, cards)
 }
 
 // Test questions
 
-func (s *CardService) AddTestQuestion(ctx context.Context, setID, userID, question string, options []model.TestOption, position int) (*model.TestQuestion, error) {
-	if err := s.ownsSet(ctx, setID, userID); err != nil {
+func (s *CollectionService) AddTestQuestion(ctx context.Context, collectionID, userID, question string, options []model.TestOption, position int) (*model.TestQuestion, error) {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	return s.testQuestions.Create(ctx, setID, question, options, position)
+	return s.testQuestions.Create(ctx, collectionID, question, options, position)
 }
 
-func (s *CardService) UpdateTestQuestion(ctx context.Context, tqID, setID, userID, question string, options []model.TestOption, position int) (*model.TestQuestion, error) {
-	if err := s.ownsSet(ctx, setID, userID); err != nil {
+func (s *CollectionService) UpdateTestQuestion(ctx context.Context, tqID, collectionID, userID, question string, options []model.TestOption, position int) (*model.TestQuestion, error) {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	tq, err := s.testQuestions.Update(ctx, tqID, setID, question, options, position)
+	tq, err := s.testQuestions.Update(ctx, tqID, collectionID, question, options, position)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return tq, err
 }
 
-func (s *CardService) DeleteTestQuestion(ctx context.Context, tqID, setID, userID string) error {
-	if err := s.ownsSet(ctx, setID, userID); err != nil {
+func (s *CollectionService) DeleteTestQuestion(ctx context.Context, tqID, collectionID, userID string) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	return s.testQuestions.Delete(ctx, tqID, setID)
+	return s.testQuestions.Delete(ctx, tqID, collectionID)
+}
+
+var validRoles = map[string]bool{"user": true, "premium": true, "admin": true}
+
+func (s *CollectionService) SetUserRole(ctx context.Context, targetUserID, role string) error {
+	if !validRoles[role] {
+		return fmt.Errorf("invalid role: %s", role)
+	}
+	return s.users.UpdateRole(ctx, targetUserID, role)
+}
+
+func (s *CollectionService) AdminDeleteCollection(ctx context.Context, collectionID string) error {
+	return s.collections.ForceDelete(ctx, collectionID)
 }

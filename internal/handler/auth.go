@@ -2,11 +2,13 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 
 	"github.com/treant-dev/cram-go/internal/auth"
+	"github.com/treant-dev/cram-go/internal/middleware"
 	"github.com/treant-dev/cram-go/internal/model"
 	"golang.org/x/oauth2"
 )
@@ -24,6 +26,17 @@ func NewAuthHandler(oauthCfg *oauth2.Config, users userUpseter) *AuthHandler {
 	return &AuthHandler{oauthCfg: oauthCfg, users: users}
 }
 
+func frontendURL() string {
+	if u := os.Getenv("FRONTEND_URL"); u != "" {
+		return u
+	}
+	return "http://localhost:3000"
+}
+
+func isSecure() bool {
+	return os.Getenv("ENV") == "production"
+}
+
 // GET /auth/google
 func (h *AuthHandler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 	state, err := auth.GenerateState()
@@ -31,8 +44,7 @@ func (h *AuthHandler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not generate state", http.StatusInternalServerError)
 		return
 	}
-	url := h.oauthCfg.AuthCodeURL(state, oauth2.AccessTypeOnline)
-	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+	http.Redirect(w, r, h.oauthCfg.AuthCodeURL(state, oauth2.AccessTypeOnline), http.StatusTemporaryRedirect)
 }
 
 // GET /auth/google/callback
@@ -66,15 +78,41 @@ func (h *AuthHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := auth.IssueToken(user.ID, user.Email)
+	token, err := auth.IssueToken(user.ID, user.Email, user.Role)
 	if err != nil {
 		http.Error(w, "could not issue token", http.StatusInternalServerError)
 		return
 	}
 
-	frontend := os.Getenv("FRONTEND_URL")
-	if frontend == "" {
-		frontend = "http://localhost:3000"
-	}
-	http.Redirect(w, r, frontend+"/auth/callback?token="+token, http.StatusTemporaryRedirect)
+	http.SetCookie(w, &http.Cookie{
+		Name:     "jwt",
+		Value:    token,
+		HttpOnly: true,
+		Secure:   isSecure(),
+		SameSite: http.SameSiteLaxMode,
+		Path:     "/",
+		MaxAge:   86400,
+	})
+	http.Redirect(w, r, frontendURL()+"/auth/callback", http.StatusTemporaryRedirect)
+}
+
+// GET /auth/me — returns the current user's ID, email, and role from the JWT.
+func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
+	claims := r.Context().Value(middleware.ClaimsKey).(*auth.Claims)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"id": claims.UserID, "email": claims.Email, "role": claims.Role})
+}
+
+// GET /auth/logout — clears the JWT cookie and redirects to the frontend home page.
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "jwt",
+		Value:    "",
+		HttpOnly: true,
+		Secure:   isSecure(),
+		SameSite: http.SameSiteLaxMode,
+		Path:     "/",
+		MaxAge:   -1,
+	})
+	http.Redirect(w, r, frontendURL(), http.StatusTemporaryRedirect)
 }

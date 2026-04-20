@@ -16,26 +16,26 @@ func NewCardRepository(pool *pgxpool.Pool) *CardRepository {
 	return &CardRepository{pool: pool}
 }
 
-func (r *CardRepository) Create(ctx context.Context, setID, question, answer string, position int) (*model.Card, error) {
+func (r *CardRepository) Create(ctx context.Context, collectionID, question, answer string, position int) (*model.Card, error) {
 	var c model.Card
 	err := r.pool.QueryRow(ctx,
-		`INSERT INTO cards (set_id, question, answer, position)
+		`INSERT INTO cards (collection_id, question, answer, position)
 		 VALUES ($1, $2, $3, $4)
-		 RETURNING id, set_id, question, answer, position, created_at, updated_at`,
-		setID, question, answer, position,
-	).Scan(&c.ID, &c.SetID, &c.Question, &c.Answer, &c.Position, &c.CreatedAt, &c.UpdatedAt)
+		 RETURNING id, collection_id, question, answer, position, created_at, updated_at`,
+		collectionID, question, answer, position,
+	).Scan(&c.ID, &c.CollectionID, &c.Question, &c.Answer, &c.Position, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("create card: %w", err)
 	}
 	return &c, nil
 }
 
-func (r *CardRepository) ListBySet(ctx context.Context, setID string) ([]model.Card, error) {
+func (r *CardRepository) ListByCollection(ctx context.Context, collectionID string) ([]model.Card, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, set_id, question, answer, position, created_at, updated_at
-		 FROM cards WHERE set_id = $1
+		`SELECT id, collection_id, question, answer, position, created_at, updated_at
+		 FROM cards WHERE collection_id = $1
 		 ORDER BY position ASC, created_at ASC`,
-		setID,
+		collectionID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list cards: %w", err)
@@ -45,7 +45,7 @@ func (r *CardRepository) ListBySet(ctx context.Context, setID string) ([]model.C
 	var cards []model.Card
 	for rows.Next() {
 		var c model.Card
-		if err := rows.Scan(&c.ID, &c.SetID, &c.Question, &c.Answer, &c.Position, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.CollectionID, &c.Question, &c.Answer, &c.Position, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan card: %w", err)
 		}
 		cards = append(cards, c)
@@ -53,33 +53,48 @@ func (r *CardRepository) ListBySet(ctx context.Context, setID string) ([]model.C
 	return cards, nil
 }
 
-func (r *CardRepository) Update(ctx context.Context, id, setID, question, answer string, position int) (*model.Card, error) {
+func (r *CardRepository) Update(ctx context.Context, id, collectionID, question, answer string, position int) (*model.Card, error) {
 	var c model.Card
 	err := r.pool.QueryRow(ctx,
 		`UPDATE cards SET question = $1, answer = $2, position = $3, updated_at = NOW()
-		 WHERE id = $4 AND set_id = $5
-		 RETURNING id, set_id, question, answer, position, created_at, updated_at`,
-		question, answer, position, id, setID,
-	).Scan(&c.ID, &c.SetID, &c.Question, &c.Answer, &c.Position, &c.CreatedAt, &c.UpdatedAt)
+		 WHERE id = $4 AND collection_id = $5
+		 RETURNING id, collection_id, question, answer, position, created_at, updated_at`,
+		question, answer, position, id, collectionID,
+	).Scan(&c.ID, &c.CollectionID, &c.Question, &c.Answer, &c.Position, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("update card: %w", err)
 	}
 	return &c, nil
 }
 
-func (r *CardRepository) Delete(ctx context.Context, id, setID string) error {
+func (r *CardRepository) Delete(ctx context.Context, id, collectionID string) error {
 	_, err := r.pool.Exec(ctx,
-		`DELETE FROM cards WHERE id = $1 AND set_id = $2`,
-		id, setID,
+		`DELETE FROM cards WHERE id = $1 AND collection_id = $2`,
+		id, collectionID,
 	)
 	return err
 }
 
-func (r *CardRepository) BulkCreate(ctx context.Context, setID string, cards []model.Card) error {
+func (r *CardRepository) BulkCreate(ctx context.Context, collectionID string, cards []model.Card) error {
+	if len(cards) == 0 {
+		return nil
+	}
+	questions := make([]string, len(cards))
+	answers := make([]string, len(cards))
+	positions := make([]int32, len(cards))
 	for i, c := range cards {
-		if _, err := r.Create(ctx, setID, c.Question, c.Answer, i); err != nil {
-			return err
-		}
+		questions[i] = c.Question
+		answers[i] = c.Answer
+		positions[i] = int32(i)
+	}
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO cards (collection_id, question, answer, position)
+		 SELECT $1, q, a, p
+		 FROM unnest($2::text[], $3::text[], $4::int[]) AS t(q, a, p)`,
+		collectionID, questions, answers, positions,
+	)
+	if err != nil {
+		return fmt.Errorf("bulk create cards: %w", err)
 	}
 	return nil
 }

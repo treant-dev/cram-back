@@ -1,2 +1,0 @@
-DROP TABLE IF EXISTS cards;
-DROP TABLE IF EXISTS study_sets;

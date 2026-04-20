@@ -43,3 +43,14 @@ func ValidateState(state string) bool {
 	delete(store.entries, state)
 	return time.Now().Before(exp)
 }
+
+func CleanupExpired() {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	now := time.Now()
+	for state, exp := range store.entries {
+		if now.After(exp) {
+			delete(store.entries, state)
+		}
+	}
+}

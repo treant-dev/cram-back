@@ -7,12 +7,20 @@ type TestOption struct {
 	IsCorrect bool   `json:"is_correct"`
 }
 
+type TQStats struct {
+	Correct   int        `json:"Correct"`
+	Incorrect int        `json:"Incorrect"`
+	Streak    int        `json:"Streak"`
+	LastSeen  *time.Time `json:"LastSeen,omitempty"`
+}
+
 type TestQuestion struct {
-	ID        string
-	SetID     string
-	Question  string
-	Options   []TestOption
-	Position  int
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID           string
+	CollectionID string
+	Question     string
+	Options      []TestOption
+	Position     int
+	Stats        *TQStats `json:"Stats,omitempty"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }

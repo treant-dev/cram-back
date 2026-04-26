@@ -4,4 +4,3 @@ api
 *.test
 .idea/
 .DS_Store
-docs/

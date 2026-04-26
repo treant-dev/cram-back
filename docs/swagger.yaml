@@ -1,0 +1,756 @@
+basePath: /
+definitions:
+  model.Card:
+    properties:
+      answer:
+        type: string
+      collectionID:
+        type: string
+      createdAt:
+        type: string
+      id:
+        type: string
+      position:
+        type: integer
+      question:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  model.Collection:
+    properties:
+      cards:
+        items:
+          $ref: '#/definitions/model.Card'
+        type: array
+      createdAt:
+        type: string
+      description:
+        type: string
+      draftID:
+        description: non-nil for active collections that have a pending draft (not
+          stored in DB)
+        type: string
+      draftOf:
+        description: non-nil for draft collections
+        type: string
+      id:
+        type: string
+      isDraft:
+        type: boolean
+      isPublic:
+        type: boolean
+      testQuestions:
+        items:
+          $ref: '#/definitions/model.TestQuestion'
+        type: array
+      title:
+        type: string
+      updatedAt:
+        type: string
+      userID:
+        type: string
+    type: object
+  model.TestOption:
+    properties:
+      is_correct:
+        type: boolean
+      text:
+        type: string
+    type: object
+  model.TestQuestion:
+    properties:
+      collectionID:
+        type: string
+      createdAt:
+        type: string
+      id:
+        type: string
+      options:
+        items:
+          $ref: '#/definitions/model.TestOption'
+        type: array
+      position:
+        type: integer
+      question:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  service.DraftCard:
+    properties:
+      answer:
+        type: string
+      question:
+        type: string
+    type: object
+  service.DraftQuestion:
+    properties:
+      options:
+        items:
+          $ref: '#/definitions/model.TestOption'
+        type: array
+      question:
+        type: string
+    type: object
+  service.HomeData:
+    properties:
+      following:
+        items:
+          $ref: '#/definitions/model.Collection'
+        type: array
+      own:
+        items:
+          $ref: '#/definitions/model.Collection'
+        type: array
+    type: object
+  service.PublicCollectionMeta:
+    properties:
+      cards:
+        items:
+          $ref: '#/definitions/model.Card'
+        type: array
+      createdAt:
+        type: string
+      description:
+        type: string
+      draftID:
+        description: non-nil for active collections that have a pending draft (not
+          stored in DB)
+        type: string
+      draftOf:
+        description: non-nil for draft collections
+        type: string
+      followerCount:
+        type: integer
+      id:
+        type: string
+      isDraft:
+        type: boolean
+      isFollowed:
+        type: boolean
+      isPublic:
+        type: boolean
+      testQuestions:
+        items:
+          $ref: '#/definitions/model.TestQuestion'
+        type: array
+      title:
+        type: string
+      updatedAt:
+        type: string
+      userID:
+        type: string
+    type: object
+  service.UpdateDraftReq:
+    properties:
+      cards:
+        items:
+          $ref: '#/definitions/service.DraftCard'
+        type: array
+      description:
+        type: string
+      isPublic:
+        type: boolean
+      testQuestions:
+        items:
+          $ref: '#/definitions/service.DraftQuestion'
+        type: array
+      title:
+        type: string
+    type: object
+  service.UserWithCollections:
+    properties:
+      collections:
+        items:
+          $ref: '#/definitions/model.Collection'
+        type: array
+      id:
+        type: string
+      name:
+        type: string
+      picture:
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: Flashcard study platform API
+  title: Cram API
+  version: "1.0"
+paths:
+  /collections:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Collection'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: List collections
+      tags:
+      - collections
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection data
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            description:
+              type: string
+            is_public:
+              type: boolean
+            title:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.Collection'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Create a collection
+      tags:
+      - collections
+  /collections/{collectionID}:
+    delete:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Delete a collection
+      tags:
+      - collections
+    get:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Collection'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Get a collection with cards and test questions
+      tags:
+      - collections
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Collection data
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            description:
+              type: string
+            is_public:
+              type: boolean
+            title:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Collection'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Update a collection
+      tags:
+      - collections
+  /collections/{collectionID}/cards:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Card data
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            answer:
+              type: string
+            position:
+              type: integer
+            question:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.Card'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Add a card to a collection
+      tags:
+      - cards
+  /collections/{collectionID}/cards/{cardID}:
+    delete:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Card ID
+        in: path
+        name: cardID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Delete a card
+      tags:
+      - cards
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Card ID
+        in: path
+        name: cardID
+        required: true
+        type: string
+      - description: Card data
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            answer:
+              type: string
+            position:
+              type: integer
+            question:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Card'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Update a card
+      tags:
+      - cards
+  /collections/{collectionID}/cards/import:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: CSV file
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            properties:
+              imported:
+                type: integer
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Bulk import cards from CSV (question,answer)
+      tags:
+      - cards
+  /collections/{collectionID}/draft:
+    delete:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Discard draft and restore the active version
+      tags:
+      - drafts
+    post:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Collection'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Get or create a draft for a collection
+      tags:
+      - drafts
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Draft content
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.UpdateDraftReq'
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Save draft content without publishing
+      tags:
+      - drafts
+  /collections/{collectionID}/draft/publish:
+    post:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Publish the draft as the active version
+      tags:
+      - drafts
+  /collections/{collectionID}/follow:
+    delete:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+      security:
+      - BearerAuth: []
+      summary: Unfollow a collection
+      tags:
+      - follows
+    post:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Follow a collection
+      tags:
+      - follows
+  /collections/{collectionID}/tests:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Question data
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            options:
+              items:
+                $ref: '#/definitions/model.TestOption'
+              type: array
+            position:
+              type: integer
+            question:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.TestQuestion'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Add a test question to a collection
+      tags:
+      - tests
+  /collections/{collectionID}/tests/{tqID}:
+    delete:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Test question ID
+        in: path
+        name: tqID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Delete a test question
+      tags:
+      - tests
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Test question ID
+        in: path
+        name: tqID
+        required: true
+        type: string
+      - description: Question data
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            options:
+              items:
+                $ref: '#/definitions/model.TestOption'
+              type: array
+            position:
+              type: integer
+            question:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.TestQuestion'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Update a test question
+      tags:
+      - tests
+  /home:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.HomeData'
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Get home page data (own + followed collections)
+      tags:
+      - collections
+  /public/collections:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/service.PublicCollectionMeta'
+            type: array
+      summary: List all public collections with follow metadata
+      tags:
+      - collections
+  /users:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/service.UserWithCollections'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      summary: List all users with their public collections
+      tags:
+      - users
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

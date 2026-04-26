@@ -1,6 +1,6 @@
 .env
 bin/
-api
+/api
 *.test
 .idea/
 .DS_Store

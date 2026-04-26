@@ -19,6 +19,7 @@ type TestQuestion struct {
 	CollectionID string
 	Question     string
 	Options      []TestOption
+	Image        string
 	Position     int
 	Stats        *TQStats `json:"Stats,omitempty"`
 	CreatedAt    time.Time

@@ -1,0 +1,2 @@
+ALTER TABLE cards ADD COLUMN image TEXT;
+ALTER TABLE test_questions ADD COLUMN image TEXT;

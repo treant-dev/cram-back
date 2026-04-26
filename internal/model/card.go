@@ -14,6 +14,7 @@ type Card struct {
 	CollectionID string
 	Question     string
 	Answer       string
+	Image        string
 	Position     int
 	Stats        *CardStats `json:"Stats,omitempty"`
 	CreatedAt    time.Time

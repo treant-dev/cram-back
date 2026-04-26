@@ -78,7 +78,7 @@ func (h *AuthHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := auth.IssueToken(user.ID, user.Email, user.Role)
+	token, err := auth.IssueToken(user.ID, user.Email, user.Role, user.Picture)
 	if err != nil {
 		http.Error(w, "could not issue token", http.StatusInternalServerError)
 		return
@@ -91,7 +91,7 @@ func (h *AuthHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 		Secure:   isSecure(),
 		SameSite: http.SameSiteLaxMode,
 		Path:     "/",
-		MaxAge:   86400,
+		MaxAge:   7 * 24 * 60 * 60,
 	})
 	http.Redirect(w, r, frontendURL()+"/auth/callback", http.StatusTemporaryRedirect)
 }
@@ -100,7 +100,7 @@ func (h *AuthHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	claims := r.Context().Value(middleware.ClaimsKey).(*auth.Claims)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"id": claims.UserID, "email": claims.Email, "role": claims.Role})
+	json.NewEncoder(w).Encode(map[string]string{"id": claims.UserID, "email": claims.Email, "role": claims.Role, "picture": claims.Picture})
 }
 
 // GET /auth/logout — clears the JWT cookie and redirects to the frontend home page.

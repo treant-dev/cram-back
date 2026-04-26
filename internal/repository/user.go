@@ -57,6 +57,11 @@ func (r *UserRepository) Upsert(ctx context.Context, googleID, email, name, pict
 	return &u, nil
 }
 
+func (r *UserRepository) Delete(ctx context.Context, userID string) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
+	return err
+}
+
 func (r *UserRepository) UpdateRole(ctx context.Context, userID, role string) error {
 	tag, err := r.pool.Exec(ctx,
 		`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`,

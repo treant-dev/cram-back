@@ -49,6 +49,7 @@ type DraftCard struct {
 	ID       string
 	Question string
 	Answer   string
+	Image    string
 }
 
 // DraftQuestion is a test question payload for draft updates.
@@ -57,6 +58,7 @@ type DraftQuestion struct {
 	ID       string
 	Question string
 	Options  []model.TestOption
+	Image    string
 }
 
 type collectionRepo interface {
@@ -70,27 +72,38 @@ type collectionRepo interface {
 	Update(ctx context.Context, id, userID, title, description string, isPublic bool) (*model.Collection, error)
 	Delete(ctx context.Context, id, userID string) error
 	ForceDelete(ctx context.Context, id string) error
+	ListAllImages(ctx context.Context, collectionID string) ([]string, error)
+	ListUserImages(ctx context.Context, userID string) ([]string, error)
 	// Draft operations
 	GetDraftFor(ctx context.Context, collectionID, userID string) (*model.Collection, error)
 	CreateDraftFrom(ctx context.Context, collectionID, userID string) (*model.Collection, error)
 	UpdateDraftContent(ctx context.Context, draftID, userID, title, description string, isPublic bool, cards []repository.DraftCardInput, tests []repository.DraftTestInput) error
 	PublishDraft(ctx context.Context, collectionID, userID string) error
 	DeleteDraft(ctx context.Context, collectionID, userID string) error
+	// Share token operations
+	GenerateShareToken(ctx context.Context, id, userID string) (string, error)
+	RevokeShareToken(ctx context.Context, id, userID string) error
+	GetByShareToken(ctx context.Context, token string) (*model.Collection, error)
 }
 
 type cardRepo interface {
-	Create(ctx context.Context, collectionID, question, answer string, position int) (*model.Card, error)
+	Create(ctx context.Context, collectionID, question, answer, image string, position int) (*model.Card, error)
 	ListByCollection(ctx context.Context, collectionID string) ([]model.Card, error)
-	Update(ctx context.Context, id, collectionID, question, answer string, position int) (*model.Card, error)
-	Delete(ctx context.Context, id, collectionID string) error
+	Update(ctx context.Context, id, collectionID, question, answer, image string, position int) (*model.Card, error)
+	Delete(ctx context.Context, id, collectionID string) (string, error)
 	BulkCreate(ctx context.Context, collectionID string, cards []model.Card) error
 }
 
 type testQuestionRepo interface {
-	Create(ctx context.Context, collectionID, question string, options []model.TestOption, position int) (*model.TestQuestion, error)
+	Create(ctx context.Context, collectionID, question string, options []model.TestOption, image string, position int) (*model.TestQuestion, error)
 	ListByCollection(ctx context.Context, collectionID string) ([]model.TestQuestion, error)
-	Update(ctx context.Context, id, collectionID, question string, options []model.TestOption, position int) (*model.TestQuestion, error)
-	Delete(ctx context.Context, id, collectionID string) error
+	Update(ctx context.Context, id, collectionID, question string, options []model.TestOption, image string, position int) (*model.TestQuestion, error)
+	Delete(ctx context.Context, id, collectionID string) (string, error)
+}
+
+type ImageStore interface {
+	DeleteURL(ctx context.Context, url string) error
+	DeleteURLs(ctx context.Context, urls []string)
 }
 
 type followRepo interface {
@@ -103,6 +116,7 @@ type followRepo interface {
 type userRepo interface {
 	ListAll(ctx context.Context) ([]model.User, error)
 	UpdateRole(ctx context.Context, userID, role string) error
+	Delete(ctx context.Context, userID string) error
 }
 
 type studyRepo interface {
@@ -119,6 +133,7 @@ type CollectionService struct {
 	follows       followRepo
 	users         userRepo
 	study         studyRepo
+	images        ImageStore
 }
 
 func NewCollectionService(
@@ -138,6 +153,8 @@ func NewCollectionService(
 		study:         study,
 	}
 }
+
+func (s *CollectionService) SetImageStore(store ImageStore) { s.images = store }
 
 // Collections
 
@@ -262,6 +279,11 @@ func (s *CollectionService) UpdateCollection(ctx context.Context, id, userID, ti
 }
 
 func (s *CollectionService) DeleteCollection(ctx context.Context, id, userID string) error {
+	if s.images != nil {
+		if urls, err := s.collections.ListAllImages(ctx, id); err == nil {
+			defer s.images.DeleteURLs(ctx, urls)
+		}
+	}
 	return s.collections.Delete(ctx, id, userID)
 }
 
@@ -328,11 +350,11 @@ func (s *CollectionService) UpdateDraft(ctx context.Context, collectionID, userI
 	}
 	cards := make([]repository.DraftCardInput, len(req.Cards))
 	for i, c := range req.Cards {
-		cards[i] = repository.DraftCardInput{ID: c.ID, Question: c.Question, Answer: c.Answer}
+		cards[i] = repository.DraftCardInput{ID: c.ID, Question: c.Question, Answer: c.Answer, Image: c.Image}
 	}
 	tests := make([]repository.DraftTestInput, len(req.TestQuestions))
 	for i, t := range req.TestQuestions {
-		tests[i] = repository.DraftTestInput{ID: t.ID, Question: t.Question, Options: t.Options}
+		tests[i] = repository.DraftTestInput{ID: t.ID, Question: t.Question, Options: t.Options, Image: t.Image}
 	}
 	return s.collections.UpdateDraftContent(ctx, draft.ID, userID, req.Title, req.Description, req.IsPublic, cards, tests)
 }
@@ -410,18 +432,18 @@ func (s *CollectionService) ListUsers(ctx context.Context) ([]UserWithCollection
 
 // Cards
 
-func (s *CollectionService) AddCard(ctx context.Context, collectionID, userID, question, answer string, position int) (*model.Card, error) {
+func (s *CollectionService) AddCard(ctx context.Context, collectionID, userID, question, answer, image string, position int) (*model.Card, error) {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	return s.cards.Create(ctx, collectionID, question, answer, position)
+	return s.cards.Create(ctx, collectionID, question, answer, image, position)
 }
 
-func (s *CollectionService) UpdateCard(ctx context.Context, cardID, collectionID, userID, question, answer string, position int) (*model.Card, error) {
+func (s *CollectionService) UpdateCard(ctx context.Context, cardID, collectionID, userID, question, answer, image string, position int) (*model.Card, error) {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	card, err := s.cards.Update(ctx, cardID, collectionID, question, answer, position)
+	card, err := s.cards.Update(ctx, cardID, collectionID, question, answer, image, position)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -432,7 +454,14 @@ func (s *CollectionService) DeleteCard(ctx context.Context, cardID, collectionID
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	return s.cards.Delete(ctx, cardID, collectionID)
+	imageURL, err := s.cards.Delete(ctx, cardID, collectionID)
+	if err != nil {
+		return err
+	}
+	if s.images != nil {
+		_ = s.images.DeleteURL(ctx, imageURL)
+	}
+	return nil
 }
 
 func (s *CollectionService) ImportCards(ctx context.Context, collectionID, userID string, cards []model.Card) error {
@@ -444,18 +473,18 @@ func (s *CollectionService) ImportCards(ctx context.Context, collectionID, userI
 
 // Test questions
 
-func (s *CollectionService) AddTestQuestion(ctx context.Context, collectionID, userID, question string, options []model.TestOption, position int) (*model.TestQuestion, error) {
+func (s *CollectionService) AddTestQuestion(ctx context.Context, collectionID, userID, question string, options []model.TestOption, image string, position int) (*model.TestQuestion, error) {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	return s.testQuestions.Create(ctx, collectionID, question, options, position)
+	return s.testQuestions.Create(ctx, collectionID, question, options, image, position)
 }
 
-func (s *CollectionService) UpdateTestQuestion(ctx context.Context, tqID, collectionID, userID, question string, options []model.TestOption, position int) (*model.TestQuestion, error) {
+func (s *CollectionService) UpdateTestQuestion(ctx context.Context, tqID, collectionID, userID, question string, options []model.TestOption, image string, position int) (*model.TestQuestion, error) {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	tq, err := s.testQuestions.Update(ctx, tqID, collectionID, question, options, position)
+	tq, err := s.testQuestions.Update(ctx, tqID, collectionID, question, options, image, position)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -466,7 +495,14 @@ func (s *CollectionService) DeleteTestQuestion(ctx context.Context, tqID, collec
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	return s.testQuestions.Delete(ctx, tqID, collectionID)
+	imageURL, err := s.testQuestions.Delete(ctx, tqID, collectionID)
+	if err != nil {
+		return err
+	}
+	if s.images != nil {
+		_ = s.images.DeleteURL(ctx, imageURL)
+	}
+	return nil
 }
 
 var validRoles = map[string]bool{"user": true, "premium": true, "admin": true}
@@ -478,6 +514,46 @@ func (s *CollectionService) SetUserRole(ctx context.Context, targetUserID, role 
 	return s.users.UpdateRole(ctx, targetUserID, role)
 }
 
+func (s *CollectionService) DeleteAccount(ctx context.Context, userID string) error {
+	if s.images != nil {
+		if urls, err := s.collections.ListUserImages(ctx, userID); err == nil {
+			defer s.images.DeleteURLs(ctx, urls)
+		}
+	}
+	return s.users.Delete(ctx, userID)
+}
+
+func (s *CollectionService) GenerateShareToken(ctx context.Context, id, userID string) (string, error) {
+	return s.collections.GenerateShareToken(ctx, id, userID)
+}
+
+func (s *CollectionService) RevokeShareToken(ctx context.Context, id, userID string) error {
+	return s.collections.RevokeShareToken(ctx, id, userID)
+}
+
+func (s *CollectionService) GetByShareToken(ctx context.Context, token string) (*model.Collection, error) {
+	col, err := s.collections.GetByShareToken(ctx, token)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	cards, err := s.cards.ListByCollection(ctx, col.ID)
+	if err != nil {
+		return nil, err
+	}
+	col.Cards = cards
+	tests, err := s.testQuestions.ListByCollection(ctx, col.ID)
+	if err != nil {
+		return nil, err
+	}
+	col.TestQuestions = tests
+	return col, nil
+}
+
 func (s *CollectionService) AdminDeleteCollection(ctx context.Context, collectionID string) error {
+	if s.images != nil {
+		if urls, err := s.collections.ListAllImages(ctx, collectionID); err == nil {
+			defer s.images.DeleteURLs(ctx, urls)
+		}
+	}
 	return s.collections.ForceDelete(ctx, collectionID)
 }

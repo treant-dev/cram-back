@@ -172,11 +172,13 @@ func (h *CardsHandler) UpdateDraft(w http.ResponseWriter, r *http.Request) {
 			ID       string `json:"id"`
 			Question string `json:"question"`
 			Answer   string `json:"answer"`
+			Image    string `json:"image"`
 		} `json:"cards"`
 		TestQuestions []struct {
 			ID       string             `json:"id"`
 			Question string             `json:"question"`
 			Options  []model.TestOption `json:"options"`
+			Image    string             `json:"image"`
 		} `json:"test_questions"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -197,10 +199,10 @@ func (h *CardsHandler) UpdateDraft(w http.ResponseWriter, r *http.Request) {
 		IsPublic:    body.IsPublic,
 	}
 	for _, c := range body.Cards {
-		req.Cards = append(req.Cards, service.DraftCard{ID: c.ID, Question: c.Question, Answer: c.Answer})
+		req.Cards = append(req.Cards, service.DraftCard{ID: c.ID, Question: c.Question, Answer: c.Answer, Image: c.Image})
 	}
 	for _, t := range body.TestQuestions {
-		req.TestQuestions = append(req.TestQuestions, service.DraftQuestion{ID: t.ID, Question: t.Question, Options: t.Options})
+		req.TestQuestions = append(req.TestQuestions, service.DraftQuestion{ID: t.ID, Question: t.Question, Options: t.Options, Image: t.Image})
 	}
 	if err := h.svc.UpdateDraft(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, req); err != nil {
 		handleErr(w, err)
@@ -354,6 +356,7 @@ func (h *CardsHandler) AddCard(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string `json:"question"`
 		Answer   string `json:"answer"`
+		Image    string `json:"image"`
 		Position int    `json:"position"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Question == "" || body.Answer == "" {
@@ -364,7 +367,7 @@ func (h *CardsHandler) AddCard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "question or answer too long", http.StatusBadRequest)
 		return
 	}
-	card, err := h.svc.AddCard(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Question, body.Answer, body.Position)
+	card, err := h.svc.AddCard(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Question, body.Answer, body.Image, body.Position)
 	if err != nil {
 		handleErr(w, err)
 		return
@@ -388,6 +391,7 @@ func (h *CardsHandler) UpdateCard(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string `json:"question"`
 		Answer   string `json:"answer"`
+		Image    string `json:"image"`
 		Position int    `json:"position"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Question == "" || body.Answer == "" {
@@ -398,7 +402,7 @@ func (h *CardsHandler) UpdateCard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "question or answer too long", http.StatusBadRequest)
 		return
 	}
-	card, err := h.svc.UpdateCard(r.Context(), chi.URLParam(r, "cardID"), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Question, body.Answer, body.Position)
+	card, err := h.svc.UpdateCard(r.Context(), chi.URLParam(r, "cardID"), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Question, body.Answer, body.Image, body.Position)
 	if err != nil {
 		handleErr(w, err)
 		return
@@ -497,6 +501,7 @@ func (h *CardsHandler) AddTestQuestion(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string             `json:"question"`
 		Options  []model.TestOption `json:"options"`
+		Image    string             `json:"image"`
 		Position int                `json:"position"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Question == "" || len(body.Options) < 2 {
@@ -513,7 +518,7 @@ func (h *CardsHandler) AddTestQuestion(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	tq, err := h.svc.AddTestQuestion(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Question, body.Options, body.Position)
+	tq, err := h.svc.AddTestQuestion(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Question, body.Options, body.Image, body.Position)
 	if err != nil {
 		handleErr(w, err)
 		return
@@ -537,6 +542,7 @@ func (h *CardsHandler) UpdateTestQuestion(w http.ResponseWriter, r *http.Request
 	var body struct {
 		Question string             `json:"question"`
 		Options  []model.TestOption `json:"options"`
+		Image    string             `json:"image"`
 		Position int                `json:"position"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Question == "" || len(body.Options) < 2 {
@@ -553,7 +559,7 @@ func (h *CardsHandler) UpdateTestQuestion(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	tq, err := h.svc.UpdateTestQuestion(r.Context(), chi.URLParam(r, "tqID"), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Question, body.Options, body.Position)
+	tq, err := h.svc.UpdateTestQuestion(r.Context(), chi.URLParam(r, "tqID"), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Question, body.Options, body.Image, body.Position)
 	if err != nil {
 		handleErr(w, err)
 		return

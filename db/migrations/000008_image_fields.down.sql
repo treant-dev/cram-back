@@ -1,0 +1,2 @@
+ALTER TABLE cards DROP COLUMN IF EXISTS image;
+ALTER TABLE test_questions DROP COLUMN IF EXISTS image;

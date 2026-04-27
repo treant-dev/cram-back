@@ -452,7 +452,9 @@ func (h *CardsHandler) ImportCSV(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	records, err := csv.NewReader(file).ReadAll()
+	r2 := csv.NewReader(file)
+	r2.Comma = ';'
+	records, err := r2.ReadAll()
 	if err != nil {
 		http.Error(w, "invalid csv", http.StatusBadRequest)
 		return

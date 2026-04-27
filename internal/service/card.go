@@ -67,7 +67,7 @@ type collectionRepo interface {
 	ListPublic(ctx context.Context) ([]model.Collection, error)
 	ListPublicForUsers(ctx context.Context, userIDs []string) (map[string][]model.Collection, error)
 	ListFollowedByUser(ctx context.Context, userID string) ([]model.Collection, error)
-	GetByID(ctx context.Context, id, userID string) (*model.Collection, error)
+	GetByID(ctx context.Context, id, userID string, isAdmin bool) (*model.Collection, error)
 	ExistsForUser(ctx context.Context, id, userID string) (bool, error)
 	Update(ctx context.Context, id, userID, title, description string, isPublic bool) (*model.Collection, error)
 	Delete(ctx context.Context, id, userID string) error
@@ -218,8 +218,8 @@ func (s *CollectionService) ListPublicWithMeta(ctx context.Context, userID strin
 	return result, nil
 }
 
-func (s *CollectionService) GetCollection(ctx context.Context, id, userID string) (*model.Collection, error) {
-	col, err := s.collections.GetByID(ctx, id, userID)
+func (s *CollectionService) GetCollection(ctx context.Context, id, userID string, isAdmin bool) (*model.Collection, error) {
+	col, err := s.collections.GetByID(ctx, id, userID, isAdmin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -381,7 +381,7 @@ func (s *CollectionService) PublishDraft(ctx context.Context, collectionID, user
 // Follows
 
 func (s *CollectionService) Follow(ctx context.Context, userID, collectionID string) error {
-	_, err := s.collections.GetByID(ctx, collectionID, userID)
+	_, err := s.collections.GetByID(ctx, collectionID, userID, false)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}

@@ -284,7 +284,8 @@ func (h *CardsHandler) Unfollow(w http.ResponseWriter, r *http.Request) {
 // @Failure      404 {string} string
 // @Router       /collections/{collectionID} [get]
 func (h *CardsHandler) GetCollection(w http.ResponseWriter, r *http.Request) {
-	col, err := h.svc.GetCollection(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID)
+	claims := h.claims(r)
+	col, err := h.svc.GetCollection(r.Context(), chi.URLParam(r, "collectionID"), claims.UserID, claims.Role == "admin")
 	if err != nil {
 		handleErr(w, err)
 		return

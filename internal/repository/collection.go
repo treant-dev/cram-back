@@ -59,18 +59,27 @@ func (r *CollectionRepository) ListByUser(ctx context.Context, userID string) ([
 	return collections, nil
 }
 
-func (r *CollectionRepository) GetByID(ctx context.Context, id, userID string) (*model.Collection, error) {
-	c, err := scanCollection(r.pool.QueryRow(ctx,
-		`SELECT `+collectionCols+` FROM collections
-		 WHERE id = $1 AND (
-		   user_id = $2
-		   OR (is_public = true AND is_draft = false)
-		   OR (is_draft = false AND EXISTS (
-		     SELECT 1 FROM collection_follows WHERE collection_id = $1 AND user_id = $2
-		   ))
-		 )`,
-		id, userID,
-	).Scan)
+func (r *CollectionRepository) GetByID(ctx context.Context, id, userID string, isAdmin bool) (*model.Collection, error) {
+	var c model.Collection
+	var err error
+	if isAdmin {
+		c, err = scanCollection(r.pool.QueryRow(ctx,
+			`SELECT `+collectionCols+` FROM collections WHERE id = $1 AND is_draft = false`,
+			id,
+		).Scan)
+	} else {
+		c, err = scanCollection(r.pool.QueryRow(ctx,
+			`SELECT `+collectionCols+` FROM collections
+			 WHERE id = $1 AND (
+			   user_id = $2
+			   OR (is_public = true AND is_draft = false)
+			   OR (is_draft = false AND EXISTS (
+			     SELECT 1 FROM collection_follows WHERE collection_id = $1 AND user_id = $2
+			   ))
+			 )`,
+			id, userID,
+		).Scan)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get collection: %w", err)
 	}

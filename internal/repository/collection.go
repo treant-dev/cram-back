@@ -59,18 +59,27 @@ func (r *CollectionRepository) ListByUser(ctx context.Context, userID string) ([
 	return collections, nil
 }
 
-func (r *CollectionRepository) GetByID(ctx context.Context, id, userID string) (*model.Collection, error) {
-	c, err := scanCollection(r.pool.QueryRow(ctx,
-		`SELECT `+collectionCols+` FROM collections
-		 WHERE id = $1 AND (
-		   user_id = $2
-		   OR (is_public = true AND is_draft = false)
-		   OR (is_draft = false AND EXISTS (
-		     SELECT 1 FROM collection_follows WHERE collection_id = $1 AND user_id = $2
-		   ))
-		 )`,
-		id, userID,
-	).Scan)
+func (r *CollectionRepository) GetByID(ctx context.Context, id, userID string, isAdmin bool) (*model.Collection, error) {
+	var c model.Collection
+	var err error
+	if isAdmin {
+		c, err = scanCollection(r.pool.QueryRow(ctx,
+			`SELECT `+collectionCols+` FROM collections WHERE id = $1 AND is_draft = false`,
+			id,
+		).Scan)
+	} else {
+		c, err = scanCollection(r.pool.QueryRow(ctx,
+			`SELECT `+collectionCols+` FROM collections
+			 WHERE id = $1 AND (
+			   user_id = $2
+			   OR (is_public = true AND is_draft = false)
+			   OR (is_draft = false AND EXISTS (
+			     SELECT 1 FROM collection_follows WHERE collection_id = $1 AND user_id = $2
+			   ))
+			 )`,
+			id, userID,
+		).Scan)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get collection: %w", err)
 	}
@@ -143,17 +152,26 @@ func (r *CollectionRepository) ListFollowedByUser(ctx context.Context, userID st
 }
 
 func (r *CollectionRepository) ListPublicForUsers(ctx context.Context, userIDs []string) (map[string][]model.Collection, error) {
+	return r.listForUsers(ctx, userIDs, true)
+}
+
+func (r *CollectionRepository) ListAllForUsers(ctx context.Context, userIDs []string) (map[string][]model.Collection, error) {
+	return r.listForUsers(ctx, userIDs, false)
+}
+
+func (r *CollectionRepository) listForUsers(ctx context.Context, userIDs []string, publicOnly bool) (map[string][]model.Collection, error) {
 	if len(userIDs) == 0 {
 		return map[string][]model.Collection{}, nil
 	}
-	rows, err := r.pool.Query(ctx,
-		`SELECT `+collectionCols+` FROM collections
-		 WHERE user_id = ANY($1) AND is_public = true AND is_draft = false
-		 ORDER BY user_id, created_at DESC`,
-		userIDs,
-	)
+	query := `SELECT ` + collectionCols + ` FROM collections
+	          WHERE user_id = ANY($1) AND is_draft = false`
+	if publicOnly {
+		query += ` AND is_public = true`
+	}
+	query += ` ORDER BY user_id, created_at DESC`
+	rows, err := r.pool.Query(ctx, query, userIDs)
 	if err != nil {
-		return nil, fmt.Errorf("list public for users: %w", err)
+		return nil, fmt.Errorf("list for users: %w", err)
 	}
 	defer rows.Close()
 	result := make(map[string][]model.Collection)

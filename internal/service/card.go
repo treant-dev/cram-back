@@ -100,6 +100,7 @@ type testQuestionRepo interface {
 	ListByCollection(ctx context.Context, collectionID string) ([]model.TestQuestion, error)
 	Update(ctx context.Context, id, collectionID, question string, options []model.TestOption, image string, position int) (*model.TestQuestion, error)
 	Delete(ctx context.Context, id, collectionID string) (string, error)
+	BulkCreate(ctx context.Context, collectionID string, tqs []model.TestQuestion) error
 }
 
 type ImageStore interface {
@@ -470,6 +471,13 @@ func (s *CollectionService) ImportCards(ctx context.Context, collectionID, userI
 		return err
 	}
 	return s.cards.BulkCreate(ctx, collectionID, cards)
+}
+
+func (s *CollectionService) ImportTests(ctx context.Context, collectionID, userID string, tqs []model.TestQuestion) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	return s.testQuestions.BulkCreate(ctx, collectionID, tqs)
 }
 
 // Test questions

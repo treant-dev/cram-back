@@ -102,7 +102,7 @@ func (r *CollectionRepository) Update(ctx context.Context, id, userID, title, de
 func (r *CollectionRepository) ExistsForUser(ctx context.Context, id, userID string) (bool, error) {
 	var exists bool
 	err := r.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM collections WHERE id=$1 AND user_id=$2 AND draft_of IS NULL)`,
+		`SELECT EXISTS(SELECT 1 FROM collections WHERE id=$1 AND user_id=$2)`,
 		id, userID,
 	).Scan(&exists)
 	return exists, err

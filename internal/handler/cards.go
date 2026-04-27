@@ -489,6 +489,77 @@ func (h *CardsHandler) ImportCSV(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]int{"imported": len(cards)})
 }
 
+// ImportTests godoc
+// @Summary      Bulk import test questions from semicolon-separated text
+// @Router       /collections/{collectionID}/tests/import [post]
+func (h *CardsHandler) ImportTests(w http.ResponseWriter, r *http.Request) {
+	const maxFileSize = 4 << 20
+	if err := r.ParseMultipartForm(maxFileSize); err != nil {
+		http.Error(w, "file too large", http.StatusBadRequest)
+		return
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "missing file", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	rd := csv.NewReader(file)
+	rd.Comma = ';'
+	rd.FieldsPerRecord = -1 // variable columns
+	records, err := rd.ReadAll()
+	if err != nil {
+		http.Error(w, "invalid csv", http.StatusBadRequest)
+		return
+	}
+
+	var tqs []model.TestQuestion
+	for _, row := range records {
+		if len(row) < 5 || (len(row)-1)%2 != 0 {
+			continue
+		}
+		q := strings.TrimSpace(row[0])
+		if q == "" {
+			continue
+		}
+		var opts []model.TestOption
+		for i := 1; i+1 < len(row); i += 2 {
+			raw := strings.ToLower(strings.TrimSpace(row[i]))
+			isCorrect := raw == "1" || raw == "t" || raw == "true"
+			text := strings.TrimSpace(row[i+1])
+			if text == "" {
+				continue
+			}
+			opts = append(opts, model.TestOption{Text: text, IsCorrect: isCorrect})
+		}
+		if len(opts) < 2 {
+			continue
+		}
+		hasCorrect := false
+		for _, o := range opts {
+			if o.IsCorrect {
+				hasCorrect = true
+				break
+			}
+		}
+		if !hasCorrect {
+			continue
+		}
+		tqs = append(tqs, model.TestQuestion{Question: q, Options: opts})
+	}
+
+	if len(tqs) == 0 {
+		http.Error(w, "no valid rows", http.StatusBadRequest)
+		return
+	}
+	if err := h.svc.ImportTests(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, tqs); err != nil {
+		handleErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]int{"imported": len(tqs)})
+}
+
 // AddTestQuestion godoc
 // @Summary      Add a test question to a collection
 // @Tags         tests

@@ -155,6 +155,7 @@ func main() {
 		r.Post("/collections/{collectionID}/draft/publish", cardsHandler.PublishDraft)
 		r.Post("/collections/{collectionID}/follow", cardsHandler.Follow)
 		r.Delete("/collections/{collectionID}/follow", cardsHandler.Unfollow)
+		r.Post("/collections/{collectionID}/tests/import", cardsHandler.ImportTests)
 		r.Post("/collections/{collectionID}/tests", cardsHandler.AddTestQuestion)
 		r.Put("/collections/{collectionID}/tests/{tqID}", cardsHandler.UpdateTestQuestion)
 		r.Delete("/collections/{collectionID}/tests/{tqID}", cardsHandler.DeleteTestQuestion)

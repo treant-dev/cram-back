@@ -88,6 +88,22 @@ func (r *TestQuestionRepository) Update(ctx context.Context, id, collectionID, q
 	return &tq, nil
 }
 
+func (r *TestQuestionRepository) BulkCreate(ctx context.Context, collectionID string, tqs []model.TestQuestion) error {
+	for i, tq := range tqs {
+		optJSON, err := json.Marshal(tq.Options)
+		if err != nil {
+			return fmt.Errorf("marshal options: %w", err)
+		}
+		if _, err = r.pool.Exec(ctx,
+			`INSERT INTO test_questions (collection_id, question, options, position) VALUES ($1, $2, $3, $4)`,
+			collectionID, tq.Question, optJSON, i,
+		); err != nil {
+			return fmt.Errorf("bulk insert test question: %w", err)
+		}
+	}
+	return nil
+}
+
 func (r *TestQuestionRepository) Delete(ctx context.Context, id, collectionID string) (string, error) {
 	var image string
 	err := r.pool.QueryRow(ctx,

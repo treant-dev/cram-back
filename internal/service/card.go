@@ -66,6 +66,7 @@ type collectionRepo interface {
 	ListByUser(ctx context.Context, userID string) ([]model.Collection, error)
 	ListPublic(ctx context.Context) ([]model.Collection, error)
 	ListPublicForUsers(ctx context.Context, userIDs []string) (map[string][]model.Collection, error)
+	ListAllForUsers(ctx context.Context, userIDs []string) (map[string][]model.Collection, error)
 	ListFollowedByUser(ctx context.Context, userID string) ([]model.Collection, error)
 	GetByID(ctx context.Context, id, userID string, isAdmin bool) (*model.Collection, error)
 	ExistsForUser(ctx context.Context, id, userID string) (bool, error)
@@ -409,7 +410,7 @@ func (s *CollectionService) ListUsers(ctx context.Context) ([]UserWithCollection
 	for i, u := range users {
 		ids[i] = u.ID
 	}
-	colsByUser, err := s.collections.ListPublicForUsers(ctx, ids)
+	colsByUser, err := s.collections.ListAllForUsers(ctx, ids)
 	if err != nil {
 		return nil, err
 	}

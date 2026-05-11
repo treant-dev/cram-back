@@ -38,9 +38,10 @@ func (h *StudyHandler) Submit(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		SessionID string `json:"session_id"`
 		Answers   []struct {
-			CardID  string `json:"card_id"`
-			TQID    string `json:"tq_id"`
-			Correct bool   `json:"correct"`
+			CardID              string   `json:"card_id"`
+			TQID                string   `json:"tq_id"`
+			Correct             bool     `json:"correct"`               // cards only
+			SelectedOptionTexts []string `json:"selected_option_texts"` // test questions only
 		} `json:"answers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.SessionID == "" {
@@ -52,7 +53,12 @@ func (h *StudyHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		if a.CardID == "" && a.TQID == "" {
 			continue
 		}
-		answers = append(answers, repository.StudyAnswer{CardID: a.CardID, TQID: a.TQID, Correct: a.Correct})
+		answers = append(answers, repository.StudyAnswer{
+			CardID:              a.CardID,
+			TQID:                a.TQID,
+			Correct:             a.Correct,
+			SelectedOptionTexts: a.SelectedOptionTexts,
+		})
 	}
 	if err := h.svc.SubmitStudySession(r.Context(), h.claims(r).UserID, body.SessionID, chi.URLParam(r, "collectionID"), answers); err != nil {
 		handleErr(w, err)

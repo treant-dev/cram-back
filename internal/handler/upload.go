@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-
-	"github.com/treant-dev/cram-go/internal/storage"
 )
 
 const (
@@ -30,7 +28,7 @@ type UploadHandler struct {
 	store uploader
 }
 
-func NewUploadHandler(store *storage.MinioStore) *UploadHandler {
+func NewUploadHandler(store uploader) *UploadHandler {
 	if store == nil {
 		return &UploadHandler{}
 	}

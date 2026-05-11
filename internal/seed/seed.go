@@ -2,7 +2,6 @@ package seed
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 
@@ -56,7 +55,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 	}
 	for i, c := range cards {
 		if _, err = pool.Exec(ctx,
-			`INSERT INTO cards (collection_id, question, answer, position) VALUES ($1,$2,$3,$4)`,
+			`INSERT INTO cards (collection_id, term, definition, position) VALUES ($1,$2,$3,$4)`,
 			colID, c[0], c[1], i,
 		); err != nil {
 			return "", fmt.Errorf("insert card: %w", err)
@@ -72,12 +71,20 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 		{"Which keyword starts a goroutine?", []seedOpt{{"go", true}, {"async", false}, {"goroutine", false}, {"spawn", false}}},
 	}
 	for i, tq := range questions {
-		opts, _ := json.Marshal(tq.opts)
-		if _, err = pool.Exec(ctx,
-			`INSERT INTO test_questions (collection_id, question, options, position) VALUES ($1,$2,$3,$4)`,
-			colID, tq.q, opts, i,
-		); err != nil {
+		var tqID string
+		if err = pool.QueryRow(ctx,
+			`INSERT INTO test_questions (collection_id, question, position) VALUES ($1,$2,$3) RETURNING id::text`,
+			colID, tq.q, i,
+		).Scan(&tqID); err != nil {
 			return "", fmt.Errorf("insert test question: %w", err)
+		}
+		for j, opt := range tq.opts {
+			if _, err = pool.Exec(ctx,
+				`INSERT INTO test_answers (test_question_id, text, is_correct, position) VALUES ($1,$2,$3,$4)`,
+				tqID, opt.Text, opt.IsCorrect, j,
+			); err != nil {
+				return "", fmt.Errorf("insert test answer: %w", err)
+			}
 		}
 	}
 
@@ -96,7 +103,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 	}
 	for i, c := range privateCards {
 		if _, err = pool.Exec(ctx,
-			`INSERT INTO cards (collection_id, question, answer, position) VALUES ($1,$2,$3,$4)`,
+			`INSERT INTO cards (collection_id, term, definition, position) VALUES ($1,$2,$3,$4)`,
 			privateColID, c[0], c[1], i,
 		); err != nil {
 			return "", fmt.Errorf("insert private card: %w", err)
@@ -199,7 +206,7 @@ func seedExtraUsers(ctx context.Context, pool *pgxpool.Pool) error {
 			}
 			for i, c := range col.cards {
 				if _, err := pool.Exec(ctx,
-					`INSERT INTO cards (collection_id, question, answer, position) VALUES ($1,$2,$3,$4)`,
+					`INSERT INTO cards (collection_id, term, definition, position) VALUES ($1,$2,$3,$4)`,
 					colID, c[0], c[1], i,
 				); err != nil {
 					return fmt.Errorf("insert extra card: %w", err)

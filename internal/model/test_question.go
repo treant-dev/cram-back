@@ -2,9 +2,12 @@ package model
 
 import "time"
 
-type TestOption struct {
-	Text      string `json:"text"`
-	IsCorrect bool   `json:"is_correct"`
+type TestAnswer struct {
+	ID          string `json:"id"`
+	Text        string `json:"text"`
+	IsCorrect   bool   `json:"is_correct"`
+	Explanation string `json:"explanation"`
+	Position    int    `json:"position"`
 }
 
 type TQStats struct {
@@ -18,7 +21,7 @@ type TestQuestion struct {
 	ID           string
 	CollectionID string
 	Question     string
-	Options      []TestOption
+	Options      []TestAnswer
 	Image        string
 	Position     int
 	Stats        *TQStats `json:"Stats,omitempty"`

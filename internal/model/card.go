@@ -12,8 +12,8 @@ type CardStats struct {
 type Card struct {
 	ID           string
 	CollectionID string
-	Question     string
-	Answer       string
+	Term         string
+	Definition   string
 	Image        string
 	Position     int
 	Stats        *CardStats `json:"Stats,omitempty"`

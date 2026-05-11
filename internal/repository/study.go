@@ -17,9 +17,23 @@ func NewStudyRepository(pool *pgxpool.Pool) *StudyRepository {
 }
 
 type StudyAnswer struct {
-	CardID  string
-	TQID    string
-	Correct bool
+	CardID              string
+	TQID                string
+	Correct             bool     // used for cards (self-assessed)
+	SelectedOptionTexts []string // used for test questions (server-verified)
+}
+
+func optionsCorrect(options []model.TestAnswer, selected []string) bool {
+	sel := make(map[string]bool, len(selected))
+	for _, s := range selected {
+		sel[s] = true
+	}
+	for _, opt := range options {
+		if opt.IsCorrect != sel[opt.Text] {
+			return false
+		}
+	}
+	return true
 }
 
 type DailyBucket struct {
@@ -62,7 +76,8 @@ func (r *StudyRepository) SubmitSession(ctx context.Context, userID, sessionID, 
 	}
 	cardIDRows.Close()
 
-	validTQs := map[string]bool{}
+	type tqData struct{ options []model.TestAnswer }
+	validTQs := map[string]tqData{}
 	tqIDRows, err := tx.Query(ctx, `SELECT id::text FROM test_questions WHERE collection_id = $1`, collectionID)
 	if err != nil {
 		return fmt.Errorf("fetch valid tqs: %w", err)
@@ -73,9 +88,34 @@ func (r *StudyRepository) SubmitSession(ctx context.Context, userID, sessionID, 
 			tqIDRows.Close()
 			return fmt.Errorf("scan tq id: %w", err)
 		}
-		validTQs[id] = true
+		validTQs[id] = tqData{}
 	}
 	tqIDRows.Close()
+
+	if len(validTQs) > 0 {
+		aRows, err := tx.Query(ctx,
+			`SELECT ta.test_question_id::text, ta.text, ta.is_correct
+			 FROM test_answers ta
+			 JOIN test_questions tq ON tq.id = ta.test_question_id
+			 WHERE tq.collection_id = $1`,
+			collectionID,
+		)
+		if err != nil {
+			return fmt.Errorf("fetch tq answers: %w", err)
+		}
+		for aRows.Next() {
+			var tqID string
+			var a model.TestAnswer
+			if err := aRows.Scan(&tqID, &a.Text, &a.IsCorrect); err != nil {
+				aRows.Close()
+				return fmt.Errorf("scan tq answer: %w", err)
+			}
+			d := validTQs[tqID]
+			d.options = append(d.options, a)
+			validTQs[tqID] = d
+		}
+		aRows.Close()
+	}
 
 	type aggEntry struct {
 		correct     int
@@ -109,13 +149,15 @@ func (r *StudyRepository) SubmitSession(ctx context.Context, userID, sessionID, 
 			}
 			e.lastCorrect = a.Correct
 		} else if a.TQID != "" {
-			if !validTQs[a.TQID] {
+			info, ok := validTQs[a.TQID]
+			if !ok {
 				continue
 			}
+			correct := optionsCorrect(info.options, a.SelectedOptionTexts)
 			if _, err = tx.Exec(ctx,
 				`INSERT INTO user_tq_events (user_id, tq_id, session_id, correct)
 				 VALUES ($1, $2, $3, $4)`,
-				userID, a.TQID, sessionID, a.Correct,
+				userID, a.TQID, sessionID, correct,
 			); err != nil {
 				return fmt.Errorf("insert tq event: %w", err)
 			}
@@ -124,12 +166,12 @@ func (r *StudyRepository) SubmitSession(ctx context.Context, userID, sessionID, 
 				e = &aggEntry{}
 				tqAgg[a.TQID] = e
 			}
-			if a.Correct {
+			if correct {
 				e.correct++
 			} else {
 				e.incorrect++
 			}
-			e.lastCorrect = a.Correct
+			e.lastCorrect = correct
 		}
 	}
 

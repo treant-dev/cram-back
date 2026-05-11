@@ -127,13 +127,13 @@ func main() {
 	accountHandler := handler.NewAccountHandler(cardSvc)
 	shareHandler := handler.NewShareHandler(cardSvc)
 
-	minioStore, minioErr := storage.NewMinioStore()
-	if minioErr != nil {
-		log.Printf("warning: MinIO unavailable (%v) — file uploads and image deletion disabled", minioErr)
+	s3Store, s3Err := storage.NewS3Store()
+	if s3Err != nil {
+		log.Printf("warning: S3 storage unavailable (%v) — file uploads and image deletion disabled", s3Err)
 	} else {
-		cardSvc.SetImageStore(minioStore)
+		cardSvc.SetImageStore(s3Store)
 	}
-	uploadHandler := handler.NewUploadHandler(minioStore)
+	uploadHandler := handler.NewUploadHandler(s3Store)
 	r.Get("/public/collections", cardsHandler.ListPublicCollections)
 	r.Get("/shared/{token}", shareHandler.View)
 	r.Group(func(r chi.Router) {

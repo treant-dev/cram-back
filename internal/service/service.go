@@ -39,26 +39,8 @@ type UpdateDraftReq struct {
 	Title         string
 	Description   string
 	IsPublic      bool
-	Cards         []DraftCard
-	TestQuestions []DraftQuestion
-}
-
-// DraftCard is a card payload for draft updates.
-// ID is the existing draft card UUID; empty means insert as new.
-type DraftCard struct {
-	ID       string
-	Question string
-	Answer   string
-	Image    string
-}
-
-// DraftQuestion is a test question payload for draft updates.
-// ID is the existing draft test question UUID; empty means insert as new.
-type DraftQuestion struct {
-	ID       string
-	Question string
-	Options  []model.TestOption
-	Image    string
+	Cards         []repository.DraftCardInput
+	TestQuestions []repository.DraftTestInput
 }
 
 type collectionRepo interface {
@@ -88,17 +70,17 @@ type collectionRepo interface {
 }
 
 type cardRepo interface {
-	Create(ctx context.Context, collectionID, question, answer, image string, position int) (*model.Card, error)
+	Create(ctx context.Context, collectionID, term, definition, image string, position int) (*model.Card, error)
 	ListByCollection(ctx context.Context, collectionID string) ([]model.Card, error)
-	Update(ctx context.Context, id, collectionID, question, answer, image string, position int) (*model.Card, error)
+	Update(ctx context.Context, id, collectionID, term, definition, image string, position int) (*model.Card, error)
 	Delete(ctx context.Context, id, collectionID string) (string, error)
 	BulkCreate(ctx context.Context, collectionID string, cards []model.Card) error
 }
 
 type testQuestionRepo interface {
-	Create(ctx context.Context, collectionID, question string, options []model.TestOption, image string, position int) (*model.TestQuestion, error)
+	Create(ctx context.Context, collectionID, question string, options []model.TestAnswer, image string, position int) (*model.TestQuestion, error)
 	ListByCollection(ctx context.Context, collectionID string) ([]model.TestQuestion, error)
-	Update(ctx context.Context, id, collectionID, question string, options []model.TestOption, image string, position int) (*model.TestQuestion, error)
+	Update(ctx context.Context, id, collectionID, question string, options []model.TestAnswer, image string, position int) (*model.TestQuestion, error)
 	Delete(ctx context.Context, id, collectionID string) (string, error)
 	BulkCreate(ctx context.Context, collectionID string, tqs []model.TestQuestion) error
 }
@@ -300,44 +282,38 @@ func (s *CollectionService) ownsCollection(ctx context.Context, collectionID, us
 	return nil
 }
 
+func (s *CollectionService) loadContent(ctx context.Context, col *model.Collection) error {
+	cards, err := s.cards.ListByCollection(ctx, col.ID)
+	if err != nil {
+		return err
+	}
+	tests, err := s.testQuestions.ListByCollection(ctx, col.ID)
+	if err != nil {
+		return err
+	}
+	col.Cards = cards
+	col.TestQuestions = tests
+	return nil
+}
+
 // Drafts
 
 // GetOrCreateDraft returns the existing draft or creates a new one from the active collection.
 func (s *CollectionService) GetOrCreateDraft(ctx context.Context, collectionID, userID string) (*model.Collection, error) {
 	draft, err := s.collections.GetDraftFor(ctx, collectionID, userID)
-	if err == nil {
-		// Draft already exists — load its content.
-		cards, err := s.cards.ListByCollection(ctx, draft.ID)
+	if err != nil {
+		// Verify ownership before creating.
+		if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+			return nil, err
+		}
+		draft, err = s.collections.CreateDraftFrom(ctx, collectionID, userID)
 		if err != nil {
 			return nil, err
 		}
-		tests, err := s.testQuestions.ListByCollection(ctx, draft.ID)
-		if err != nil {
-			return nil, err
-		}
-		draft.Cards = cards
-		draft.TestQuestions = tests
-		return draft, nil
 	}
-
-	// Verify ownership before creating.
-	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+	if err := s.loadContent(ctx, draft); err != nil {
 		return nil, err
 	}
-	draft, err = s.collections.CreateDraftFrom(ctx, collectionID, userID)
-	if err != nil {
-		return nil, err
-	}
-	cards, err := s.cards.ListByCollection(ctx, draft.ID)
-	if err != nil {
-		return nil, err
-	}
-	tests, err := s.testQuestions.ListByCollection(ctx, draft.ID)
-	if err != nil {
-		return nil, err
-	}
-	draft.Cards = cards
-	draft.TestQuestions = tests
 	return draft, nil
 }
 
@@ -350,15 +326,7 @@ func (s *CollectionService) UpdateDraft(ctx context.Context, collectionID, userI
 	if err != nil {
 		return err
 	}
-	cards := make([]repository.DraftCardInput, len(req.Cards))
-	for i, c := range req.Cards {
-		cards[i] = repository.DraftCardInput{ID: c.ID, Question: c.Question, Answer: c.Answer, Image: c.Image}
-	}
-	tests := make([]repository.DraftTestInput, len(req.TestQuestions))
-	for i, t := range req.TestQuestions {
-		tests[i] = repository.DraftTestInput{ID: t.ID, Question: t.Question, Options: t.Options, Image: t.Image}
-	}
-	return s.collections.UpdateDraftContent(ctx, draft.ID, userID, req.Title, req.Description, req.IsPublic, cards, tests)
+	return s.collections.UpdateDraftContent(ctx, draft.ID, userID, req.Title, req.Description, req.IsPublic, req.Cards, req.TestQuestions)
 }
 
 // DiscardDraft deletes the draft.
@@ -434,18 +402,18 @@ func (s *CollectionService) ListUsers(ctx context.Context) ([]UserWithCollection
 
 // Cards
 
-func (s *CollectionService) AddCard(ctx context.Context, collectionID, userID, question, answer, image string, position int) (*model.Card, error) {
+func (s *CollectionService) AddCard(ctx context.Context, collectionID, userID, term, definition, image string, position int) (*model.Card, error) {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	return s.cards.Create(ctx, collectionID, question, answer, image, position)
+	return s.cards.Create(ctx, collectionID, term, definition, image, position)
 }
 
-func (s *CollectionService) UpdateCard(ctx context.Context, cardID, collectionID, userID, question, answer, image string, position int) (*model.Card, error) {
+func (s *CollectionService) UpdateCard(ctx context.Context, cardID, collectionID, userID, term, definition, image string, position int) (*model.Card, error) {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	card, err := s.cards.Update(ctx, cardID, collectionID, question, answer, image, position)
+	card, err := s.cards.Update(ctx, cardID, collectionID, term, definition, image, position)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -482,14 +450,14 @@ func (s *CollectionService) ImportTests(ctx context.Context, collectionID, userI
 
 // Test questions
 
-func (s *CollectionService) AddTestQuestion(ctx context.Context, collectionID, userID, question string, options []model.TestOption, image string, position int) (*model.TestQuestion, error) {
+func (s *CollectionService) AddTestQuestion(ctx context.Context, collectionID, userID, question string, options []model.TestAnswer, image string, position int) (*model.TestQuestion, error) {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
 	return s.testQuestions.Create(ctx, collectionID, question, options, image, position)
 }
 
-func (s *CollectionService) UpdateTestQuestion(ctx context.Context, tqID, collectionID, userID, question string, options []model.TestOption, image string, position int) (*model.TestQuestion, error) {
+func (s *CollectionService) UpdateTestQuestion(ctx context.Context, tqID, collectionID, userID, question string, options []model.TestAnswer, image string, position int) (*model.TestQuestion, error) {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
@@ -545,16 +513,9 @@ func (s *CollectionService) GetByShareToken(ctx context.Context, token string) (
 	if err != nil {
 		return nil, ErrNotFound
 	}
-	cards, err := s.cards.ListByCollection(ctx, col.ID)
-	if err != nil {
+	if err := s.loadContent(ctx, col); err != nil {
 		return nil, err
 	}
-	col.Cards = cards
-	tests, err := s.testQuestions.ListByCollection(ctx, col.ID)
-	if err != nil {
-		return nil, err
-	}
-	col.TestQuestions = tests
 	return col, nil
 }
 

@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -230,16 +229,23 @@ func (r *CollectionRepository) CreateDraftFrom(ctx context.Context, collectionID
 	}
 
 	if _, err = tx.Exec(ctx,
-		`INSERT INTO cards (collection_id, question, answer, image, position, source_card_id, created_at, updated_at)
-		 SELECT $1, question, answer, image, position, id, created_at, updated_at FROM cards WHERE collection_id=$2`,
+		`INSERT INTO cards (collection_id, term, definition, image, position, source_card_id, created_at, updated_at)
+		 SELECT $1, term, definition, image, position, id, created_at, updated_at FROM cards WHERE collection_id=$2`,
 		c.ID, collectionID,
 	); err != nil {
 		return nil, fmt.Errorf("copy cards to draft: %w", err)
 	}
 
-	if _, err = tx.Exec(ctx,
-		`INSERT INTO test_questions (collection_id, question, options, image, position, source_tq_id, created_at, updated_at)
-		 SELECT $1, question, options, image, position, id, created_at, updated_at FROM test_questions WHERE collection_id=$2`,
+	if _, err = tx.Exec(ctx, `
+		WITH new_tqs AS (
+			INSERT INTO test_questions (collection_id, question, image, position, source_tq_id, created_at, updated_at)
+			SELECT $1, question, image, position, id, created_at, updated_at
+			FROM test_questions WHERE collection_id = $2
+			RETURNING id, source_tq_id
+		)
+		INSERT INTO test_answers (test_question_id, text, is_correct, explanation, position)
+		SELECT n.id, a.text, a.is_correct, a.explanation, a.position
+		FROM new_tqs n JOIN test_answers a ON a.test_question_id = n.source_tq_id`,
 		c.ID, collectionID,
 	); err != nil {
 		return nil, fmt.Errorf("copy test_questions to draft: %w", err)
@@ -281,16 +287,16 @@ func (r *CollectionRepository) UpdateDraftContent(ctx context.Context, draftID, 
 	for i, c := range cards {
 		if c.ID != "" && existingCards[c.ID] {
 			if _, err = tx.Exec(ctx,
-				`UPDATE cards SET question=$1, answer=$2, image=$3, position=$4, updated_at=NOW() WHERE id=$5`,
-				c.Question, c.Answer, c.Image, i, c.ID,
+				`UPDATE cards SET term=$1, definition=$2, image=$3, position=$4, updated_at=NOW() WHERE id=$5`,
+				c.Term, c.Definition, c.Image, i, c.ID,
 			); err != nil {
 				return fmt.Errorf("update draft card: %w", err)
 			}
 			seenCards[c.ID] = true
 		} else {
 			if _, err = tx.Exec(ctx,
-				`INSERT INTO cards (collection_id, question, answer, image, position) VALUES ($1, $2, $3, $4, $5)`,
-				draftID, c.Question, c.Answer, c.Image, i,
+				`INSERT INTO cards (collection_id, term, definition, image, position) VALUES ($1, $2, $3, $4, $5)`,
+				draftID, c.Term, c.Definition, c.Image, i,
 			); err != nil {
 				return fmt.Errorf("insert draft card: %w", err)
 			}
@@ -311,24 +317,40 @@ func (r *CollectionRepository) UpdateDraftContent(ctx context.Context, draftID, 
 	}
 	seenTests := make(map[string]bool)
 	for i, tq := range tests {
-		optJSON, err := json.Marshal(tq.Options)
-		if err != nil {
-			return fmt.Errorf("marshal options: %w", err)
-		}
 		if tq.ID != "" && existingTests[tq.ID] {
 			if _, err = tx.Exec(ctx,
-				`UPDATE test_questions SET question=$1, options=$2, image=$3, position=$4, updated_at=NOW() WHERE id=$5`,
-				tq.Question, optJSON, tq.Image, i, tq.ID,
+				`UPDATE test_questions SET question=$1, image=$2, position=$3, updated_at=NOW() WHERE id=$4`,
+				tq.Question, tq.Image, i, tq.ID,
 			); err != nil {
 				return fmt.Errorf("update draft test: %w", err)
 			}
+			if _, err = tx.Exec(ctx, `DELETE FROM test_answers WHERE test_question_id=$1`, tq.ID); err != nil {
+				return fmt.Errorf("delete draft test answers: %w", err)
+			}
+			for j, a := range tq.Options {
+				if _, err = tx.Exec(ctx,
+					`INSERT INTO test_answers (test_question_id, text, is_correct, explanation, position) VALUES ($1,$2,$3,$4,$5)`,
+					tq.ID, a.Text, a.IsCorrect, a.Explanation, j,
+				); err != nil {
+					return fmt.Errorf("insert draft test answer: %w", err)
+				}
+			}
 			seenTests[tq.ID] = true
 		} else {
-			if _, err = tx.Exec(ctx,
-				`INSERT INTO test_questions (collection_id, question, options, image, position) VALUES ($1, $2, $3, $4, $5)`,
-				draftID, tq.Question, optJSON, tq.Image, i,
-			); err != nil {
+			var newID string
+			if err = tx.QueryRow(ctx,
+				`INSERT INTO test_questions (collection_id, question, image, position) VALUES ($1,$2,$3,$4) RETURNING id::text`,
+				draftID, tq.Question, tq.Image, i,
+			).Scan(&newID); err != nil {
 				return fmt.Errorf("insert draft test: %w", err)
+			}
+			for j, a := range tq.Options {
+				if _, err = tx.Exec(ctx,
+					`INSERT INTO test_answers (test_question_id, text, is_correct, explanation, position) VALUES ($1,$2,$3,$4,$5)`,
+					newID, a.Text, a.IsCorrect, a.Explanation, j,
+				); err != nil {
+					return fmt.Errorf("insert draft test answer: %w", err)
+				}
 			}
 		}
 	}
@@ -372,16 +394,16 @@ func (r *CollectionRepository) PublishDraft(ctx context.Context, collectionID, u
 
 	// --- Cards ---
 	type draftCard struct {
-		ID       string
-		SourceID *string
-		Question string
-		Answer   string
-		Image    string
-		Position int
+		ID         string
+		SourceID   *string
+		Term       string
+		Definition string
+		Image      string
+		Position   int
 	}
 	var draftCards []draftCard
 	cardRows, err := tx.Query(ctx,
-		`SELECT id, source_card_id, question, answer, COALESCE(image, ''), position FROM cards WHERE collection_id=$1`,
+		`SELECT id, source_card_id, term, definition, COALESCE(image, ''), position FROM cards WHERE collection_id=$1`,
 		draftID,
 	)
 	if err != nil {
@@ -389,7 +411,7 @@ func (r *CollectionRepository) PublishDraft(ctx context.Context, collectionID, u
 	}
 	for cardRows.Next() {
 		var dc draftCard
-		if err := cardRows.Scan(&dc.ID, &dc.SourceID, &dc.Question, &dc.Answer, &dc.Image, &dc.Position); err != nil {
+		if err := cardRows.Scan(&dc.ID, &dc.SourceID, &dc.Term, &dc.Definition, &dc.Image, &dc.Position); err != nil {
 			cardRows.Close()
 			return fmt.Errorf("scan draft card: %w", err)
 		}
@@ -412,15 +434,15 @@ func (r *CollectionRepository) PublishDraft(ctx context.Context, collectionID, u
 	for _, dc := range draftCards {
 		if dc.SourceID != nil {
 			if _, err = tx.Exec(ctx,
-				`UPDATE cards SET question=$1, answer=$2, image=$3, position=$4, updated_at=NOW() WHERE id=$5`,
-				dc.Question, dc.Answer, dc.Image, dc.Position, *dc.SourceID,
+				`UPDATE cards SET term=$1, definition=$2, image=$3, position=$4, updated_at=NOW() WHERE id=$5`,
+				dc.Term, dc.Definition, dc.Image, dc.Position, *dc.SourceID,
 			); err != nil {
 				return fmt.Errorf("update original card: %w", err)
 			}
 		} else {
 			if _, err = tx.Exec(ctx,
-				`INSERT INTO cards (collection_id, question, answer, image, position) VALUES ($1, $2, $3, $4, $5)`,
-				collectionID, dc.Question, dc.Answer, dc.Image, dc.Position,
+				`INSERT INTO cards (collection_id, term, definition, image, position) VALUES ($1, $2, $3, $4, $5)`,
+				collectionID, dc.Term, dc.Definition, dc.Image, dc.Position,
 			); err != nil {
 				return fmt.Errorf("insert new card: %w", err)
 			}
@@ -432,13 +454,13 @@ func (r *CollectionRepository) PublishDraft(ctx context.Context, collectionID, u
 		ID       string
 		SourceID *string
 		Question string
-		Options  []byte
 		Image    string
 		Position int
+		Answers  []model.TestAnswer
 	}
 	var draftTQs []draftTQ
 	tqRows, err := tx.Query(ctx,
-		`SELECT id, source_tq_id, question, options, COALESCE(image, ''), position FROM test_questions WHERE collection_id=$1`,
+		`SELECT id::text, source_tq_id::text, question, COALESCE(image, ''), position FROM test_questions WHERE collection_id=$1`,
 		draftID,
 	)
 	if err != nil {
@@ -446,13 +468,42 @@ func (r *CollectionRepository) PublishDraft(ctx context.Context, collectionID, u
 	}
 	for tqRows.Next() {
 		var dtq draftTQ
-		if err := tqRows.Scan(&dtq.ID, &dtq.SourceID, &dtq.Question, &dtq.Options, &dtq.Image, &dtq.Position); err != nil {
+		if err := tqRows.Scan(&dtq.ID, &dtq.SourceID, &dtq.Question, &dtq.Image, &dtq.Position); err != nil {
 			tqRows.Close()
 			return fmt.Errorf("scan draft test: %w", err)
 		}
 		draftTQs = append(draftTQs, dtq)
 	}
 	tqRows.Close()
+
+	if len(draftTQs) > 0 {
+		draftTQIDs := make([]string, len(draftTQs))
+		tqIdxByID := make(map[string]int, len(draftTQs))
+		for i, dtq := range draftTQs {
+			draftTQIDs[i] = dtq.ID
+			tqIdxByID[dtq.ID] = i
+		}
+		aRows, err := tx.Query(ctx,
+			`SELECT test_question_id::text, text, is_correct, COALESCE(explanation,''), position
+			 FROM test_answers WHERE test_question_id = ANY($1::uuid[]) ORDER BY position ASC`,
+			draftTQIDs,
+		)
+		if err != nil {
+			return fmt.Errorf("fetch draft test answers: %w", err)
+		}
+		for aRows.Next() {
+			var tqID string
+			var a model.TestAnswer
+			if err := aRows.Scan(&tqID, &a.Text, &a.IsCorrect, &a.Explanation, &a.Position); err != nil {
+				aRows.Close()
+				return fmt.Errorf("scan draft test answer: %w", err)
+			}
+			if idx, ok := tqIdxByID[tqID]; ok {
+				draftTQs[idx].Answers = append(draftTQs[idx].Answers, a)
+			}
+		}
+		aRows.Close()
+	}
 
 	sourceTQIDs := make([]string, 0, len(draftTQs))
 	for _, dtq := range draftTQs {
@@ -469,17 +520,37 @@ func (r *CollectionRepository) PublishDraft(ctx context.Context, collectionID, u
 	for _, dtq := range draftTQs {
 		if dtq.SourceID != nil {
 			if _, err = tx.Exec(ctx,
-				`UPDATE test_questions SET question=$1, options=$2, image=$3, position=$4, updated_at=NOW() WHERE id=$5`,
-				dtq.Question, dtq.Options, dtq.Image, dtq.Position, *dtq.SourceID,
+				`UPDATE test_questions SET question=$1, image=$2, position=$3, updated_at=NOW() WHERE id=$4`,
+				dtq.Question, dtq.Image, dtq.Position, *dtq.SourceID,
 			); err != nil {
 				return fmt.Errorf("update original test: %w", err)
 			}
+			if _, err = tx.Exec(ctx, `DELETE FROM test_answers WHERE test_question_id=$1`, *dtq.SourceID); err != nil {
+				return fmt.Errorf("delete original test answers: %w", err)
+			}
+			for j, a := range dtq.Answers {
+				if _, err = tx.Exec(ctx,
+					`INSERT INTO test_answers (test_question_id, text, is_correct, explanation, position) VALUES ($1,$2,$3,$4,$5)`,
+					*dtq.SourceID, a.Text, a.IsCorrect, a.Explanation, j,
+				); err != nil {
+					return fmt.Errorf("insert original test answer: %w", err)
+				}
+			}
 		} else {
-			if _, err = tx.Exec(ctx,
-				`INSERT INTO test_questions (collection_id, question, options, image, position) VALUES ($1, $2, $3, $4, $5)`,
-				collectionID, dtq.Question, dtq.Options, dtq.Image, dtq.Position,
-			); err != nil {
+			var newTQID string
+			if err = tx.QueryRow(ctx,
+				`INSERT INTO test_questions (collection_id, question, image, position) VALUES ($1,$2,$3,$4) RETURNING id::text`,
+				collectionID, dtq.Question, dtq.Image, dtq.Position,
+			).Scan(&newTQID); err != nil {
 				return fmt.Errorf("insert new test: %w", err)
+			}
+			for j, a := range dtq.Answers {
+				if _, err = tx.Exec(ctx,
+					`INSERT INTO test_answers (test_question_id, text, is_correct, explanation, position) VALUES ($1,$2,$3,$4,$5)`,
+					newTQID, a.Text, a.IsCorrect, a.Explanation, j,
+				); err != nil {
+					return fmt.Errorf("insert new test answer: %w", err)
+				}
 			}
 		}
 	}
@@ -555,10 +626,10 @@ func (r *CollectionRepository) DeleteDraft(ctx context.Context, collectionID, us
 // DraftCardInput carries card content for draft updates.
 // ID is the existing draft card UUID; empty means insert as new.
 type DraftCardInput struct {
-	ID       string
-	Question string
-	Answer   string
-	Image    string
+	ID         string
+	Term       string
+	Definition string
+	Image      string
 }
 
 // DraftTestInput carries test question content for draft updates.
@@ -566,7 +637,7 @@ type DraftCardInput struct {
 type DraftTestInput struct {
 	ID       string
 	Question string
-	Options  []model.TestOption
+	Options  []model.TestAnswer
 	Image    string
 }
 

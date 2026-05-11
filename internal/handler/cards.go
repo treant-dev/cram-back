@@ -13,6 +13,7 @@ import (
 	"github.com/treant-dev/cram-go/internal/auth"
 	"github.com/treant-dev/cram-go/internal/middleware"
 	"github.com/treant-dev/cram-go/internal/model"
+	"github.com/treant-dev/cram-go/internal/repository"
 	"github.com/treant-dev/cram-go/internal/service"
 )
 
@@ -169,15 +170,15 @@ func (h *CardsHandler) UpdateDraft(w http.ResponseWriter, r *http.Request) {
 		Description   string `json:"description"`
 		IsPublic      bool   `json:"is_public"`
 		Cards         []struct {
-			ID       string `json:"id"`
-			Question string `json:"question"`
-			Answer   string `json:"answer"`
-			Image    string `json:"image"`
+			ID         string `json:"id"`
+			Term       string `json:"term"`
+			Definition string `json:"definition"`
+			Image      string `json:"image"`
 		} `json:"cards"`
 		TestQuestions []struct {
 			ID       string             `json:"id"`
 			Question string             `json:"question"`
-			Options  []model.TestOption `json:"options"`
+			Options  []model.TestAnswer `json:"options"`
 			Image    string             `json:"image"`
 		} `json:"test_questions"`
 	}
@@ -199,10 +200,10 @@ func (h *CardsHandler) UpdateDraft(w http.ResponseWriter, r *http.Request) {
 		IsPublic:    body.IsPublic,
 	}
 	for _, c := range body.Cards {
-		req.Cards = append(req.Cards, service.DraftCard{ID: c.ID, Question: c.Question, Answer: c.Answer, Image: c.Image})
+		req.Cards = append(req.Cards, repository.DraftCardInput{ID: c.ID, Term: c.Term, Definition: c.Definition, Image: c.Image})
 	}
 	for _, t := range body.TestQuestions {
-		req.TestQuestions = append(req.TestQuestions, service.DraftQuestion{ID: t.ID, Question: t.Question, Options: t.Options, Image: t.Image})
+		req.TestQuestions = append(req.TestQuestions, repository.DraftTestInput{ID: t.ID, Question: t.Question, Options: t.Options, Image: t.Image})
 	}
 	if err := h.svc.UpdateDraft(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, req); err != nil {
 		handleErr(w, err)
@@ -355,20 +356,20 @@ func (h *CardsHandler) DeleteCollection(w http.ResponseWriter, r *http.Request) 
 // @Router       /collections/{collectionID}/cards [post]
 func (h *CardsHandler) AddCard(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Question string `json:"question"`
-		Answer   string `json:"answer"`
-		Image    string `json:"image"`
-		Position int    `json:"position"`
+		Term       string `json:"term"`
+		Definition string `json:"definition"`
+		Image      string `json:"image"`
+		Position   int    `json:"position"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Question == "" || body.Answer == "" {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Term == "" || body.Definition == "" {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if len(body.Question) > maxFieldLen || len(body.Answer) > maxFieldLen {
-		http.Error(w, "question or answer too long", http.StatusBadRequest)
+	if len(body.Term) > maxFieldLen || len(body.Definition) > maxFieldLen {
+		http.Error(w, "term or definition too long", http.StatusBadRequest)
 		return
 	}
-	card, err := h.svc.AddCard(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Question, body.Answer, body.Image, body.Position)
+	card, err := h.svc.AddCard(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Term, body.Definition, body.Image, body.Position)
 	if err != nil {
 		handleErr(w, err)
 		return
@@ -390,20 +391,20 @@ func (h *CardsHandler) AddCard(w http.ResponseWriter, r *http.Request) {
 // @Router       /collections/{collectionID}/cards/{cardID} [put]
 func (h *CardsHandler) UpdateCard(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Question string `json:"question"`
-		Answer   string `json:"answer"`
-		Image    string `json:"image"`
-		Position int    `json:"position"`
+		Term       string `json:"term"`
+		Definition string `json:"definition"`
+		Image      string `json:"image"`
+		Position   int    `json:"position"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Question == "" || body.Answer == "" {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Term == "" || body.Definition == "" {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if len(body.Question) > maxFieldLen || len(body.Answer) > maxFieldLen {
-		http.Error(w, "question or answer too long", http.StatusBadRequest)
+	if len(body.Term) > maxFieldLen || len(body.Definition) > maxFieldLen {
+		http.Error(w, "term or definition too long", http.StatusBadRequest)
 		return
 	}
-	card, err := h.svc.UpdateCard(r.Context(), chi.URLParam(r, "cardID"), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Question, body.Answer, body.Image, body.Position)
+	card, err := h.svc.UpdateCard(r.Context(), chi.URLParam(r, "cardID"), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Term, body.Definition, body.Image, body.Position)
 	if err != nil {
 		handleErr(w, err)
 		return
@@ -470,7 +471,7 @@ func (h *CardsHandler) ImportCSV(w http.ResponseWriter, r *http.Request) {
 		if q == "" || a == "" {
 			continue
 		}
-		cards = append(cards, model.Card{Question: q, Answer: a})
+		cards = append(cards, model.Card{Term: q, Definition: a})
 	}
 
 	if len(cards) == 0 {
@@ -523,7 +524,7 @@ func (h *CardsHandler) ImportTests(w http.ResponseWriter, r *http.Request) {
 		if q == "" {
 			continue
 		}
-		var opts []model.TestOption
+		var opts []model.TestAnswer
 		for i := 1; i+1 < len(row); i += 2 {
 			raw := strings.ToLower(strings.TrimSpace(row[i]))
 			isCorrect := raw == "1" || raw == "t" || raw == "true"
@@ -531,7 +532,7 @@ func (h *CardsHandler) ImportTests(w http.ResponseWriter, r *http.Request) {
 			if text == "" {
 				continue
 			}
-			opts = append(opts, model.TestOption{Text: text, IsCorrect: isCorrect})
+			opts = append(opts, model.TestAnswer{Text: text, IsCorrect: isCorrect})
 		}
 		if len(opts) < 2 {
 			continue
@@ -567,14 +568,14 @@ func (h *CardsHandler) ImportTests(w http.ResponseWriter, r *http.Request) {
 // @Produce      json
 // @Security     BearerAuth
 // @Param        collectionID path string true "Collection ID"
-// @Param        body body object{question=string,options=[]model.TestOption,position=int} true "Question data"
+// @Param        body body object{question=string,options=[]model.TestAnswer,position=int} true "Question data"
 // @Success      201 {object} model.TestQuestion
 // @Failure      404 {string} string
 // @Router       /collections/{collectionID}/tests [post]
 func (h *CardsHandler) AddTestQuestion(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string             `json:"question"`
-		Options  []model.TestOption `json:"options"`
+		Options  []model.TestAnswer `json:"options"`
 		Image    string             `json:"image"`
 		Position int                `json:"position"`
 	}
@@ -608,14 +609,14 @@ func (h *CardsHandler) AddTestQuestion(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Param        collectionID path string true "Collection ID"
 // @Param        tqID path string true "Test question ID"
-// @Param        body body object{question=string,options=[]model.TestOption,position=int} true "Question data"
+// @Param        body body object{question=string,options=[]model.TestAnswer,position=int} true "Question data"
 // @Success      200 {object} model.TestQuestion
 // @Failure      404 {string} string
 // @Router       /collections/{collectionID}/tests/{tqID} [put]
 func (h *CardsHandler) UpdateTestQuestion(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string             `json:"question"`
-		Options  []model.TestOption `json:"options"`
+		Options  []model.TestAnswer `json:"options"`
 		Image    string             `json:"image"`
 		Position int                `json:"position"`
 	}

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
+	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/treant-dev/cram-go/internal/model"
@@ -105,9 +108,15 @@ type userRepo interface {
 
 type studyRepo interface {
 	SubmitSession(ctx context.Context, userID, sessionID, collectionID string, answers []repository.StudyAnswer) error
-	ListCardStats(ctx context.Context, collectionID, userID string) (map[string]model.CardStats, error)
-	ListTQStats(ctx context.Context, collectionID, userID string) (map[string]model.TQStats, error)
 	GetHistory(ctx context.Context, collectionID, userID string, days int) (*repository.StudyHistoryData, error)
+}
+
+type progressRepo interface {
+	GetForCollection(ctx context.Context, collectionID, userID string) (*repository.ProgressData, error)
+	GetCardProgress(ctx context.Context, userID, cardID string) (int, time.Time)
+	GetTQProgress(ctx context.Context, userID, tqID string) (int, time.Time)
+	UpsertCard(ctx context.Context, userID, cardID string, level int, nextReview time.Time) error
+	UpsertTQ(ctx context.Context, userID, tqID string, level int, nextReview time.Time) error
 }
 
 type CollectionService struct {
@@ -117,6 +126,7 @@ type CollectionService struct {
 	follows       followRepo
 	users         userRepo
 	study         studyRepo
+	progress      progressRepo
 	images        ImageStore
 }
 
@@ -127,6 +137,7 @@ func NewCollectionService(
 	follows *repository.FollowRepository,
 	users *repository.UserRepository,
 	study *repository.StudyRepository,
+	progress *repository.ProgressRepository,
 ) *CollectionService {
 	return &CollectionService{
 		collections:   collections,
@@ -135,6 +146,7 @@ func NewCollectionService(
 		follows:       follows,
 		users:         users,
 		study:         study,
+		progress:      progress,
 	}
 }
 
@@ -220,22 +232,6 @@ func (s *CollectionService) GetCollection(ctx context.Context, id, userID string
 	}
 	col.Cards = cards
 	col.TestQuestions = tqs
-
-	// Attach per-user stats (errors are non-fatal; stats are best-effort).
-	if cardStats, err := s.study.ListCardStats(ctx, id, userID); err == nil {
-		for i := range col.Cards {
-			if st, ok := cardStats[col.Cards[i].ID]; ok {
-				col.Cards[i].Stats = &st
-			}
-		}
-	}
-	if tqStats, err := s.study.ListTQStats(ctx, id, userID); err == nil {
-		for i := range col.TestQuestions {
-			if st, ok := tqStats[col.TestQuestions[i].ID]; ok {
-				col.TestQuestions[i].Stats = &st
-			}
-		}
-	}
 
 	// Populate DraftID for the owner so the frontend knows a draft exists.
 	if col.UserID == userID {
@@ -526,4 +522,209 @@ func (s *CollectionService) AdminDeleteCollection(ctx context.Context, collectio
 		}
 	}
 	return s.collections.ForceDelete(ctx, collectionID)
+}
+
+// Progress
+
+func (s *CollectionService) GetProgress(ctx context.Context, collectionID, userID string) (*repository.ProgressData, error) {
+	return s.progress.GetForCollection(ctx, collectionID, userID)
+}
+
+// UpdateProgress applies answer result then confidence delta to compute the new level,
+// persists it, and returns the resulting level and next review time.
+func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collectionID, itemType, itemID string, correct bool, confidenceDelta int) (int, time.Time, error) {
+	var current int
+	var currentNextReview time.Time
+	if itemType == "card" {
+		current, currentNextReview = s.progress.GetCardProgress(ctx, userID, itemID)
+	} else {
+		current, currentNextReview = s.progress.GetTQProgress(ctx, userID, itemID)
+	}
+
+	isDue := currentNextReview.IsZero() || !time.Now().Before(currentNextReview)
+	level := progressApplyAnswer(current, correct, currentNextReview)
+	level = progressApplyConfidence(level, confidenceDelta)
+
+	// Only update next_review_at when the item was due, reached mastery,
+	// was answered incorrectly, or confidence was lowered.
+	var nextReview time.Time
+	if isDue || level == 7 || !correct || confidenceDelta == -1 {
+		nextReview = progressNextReview(level)
+	} else {
+		nextReview = currentNextReview
+	}
+
+	var err error
+	if itemType == "card" {
+		err = s.progress.UpsertCard(ctx, userID, itemID, level, nextReview)
+	} else {
+		err = s.progress.UpsertTQ(ctx, userID, itemID, level, nextReview)
+	}
+	return level, nextReview, err
+}
+
+// BlitzItem is one item in a blitz session.
+type BlitzItem struct {
+	Type string              `json:"type"` // "card" or "tq"
+	Card *model.Card         `json:"card,omitempty"`
+	TQ   *model.TestQuestion `json:"tq,omitempty"`
+}
+
+// BlitzCardTerm is a lightweight card entry used for distractor generation on the client.
+type BlitzCardTerm struct {
+	ID   string `json:"ID"`
+	Term string `json:"Term"`
+}
+
+// BlitzResult is the response for GET /collections/{id}/blitz.
+type BlitzResult struct {
+	Items    []BlitzItem     `json:"items"`
+	CardPool []BlitzCardTerm `json:"card_pool"`
+}
+
+// GetBlitz returns up to 7 non-mastered items prioritised by due date,
+// with the due group randomly ordered and the not-yet-due group sorted
+// by last_review_at ASC (oldest reviewed first).
+func (s *CollectionService) GetBlitz(ctx context.Context, collectionID, userID string) (*BlitzResult, error) {
+	cards, err := s.cards.ListByCollection(ctx, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	tqs, err := s.testQuestions.ListByCollection(ctx, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	progress, err := s.progress.GetForCollection(ctx, collectionID, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+
+	type candidate struct {
+		cardIdx  int
+		tqIdx    int
+		lastSeen *time.Time
+	}
+
+	var due, notDue []candidate
+
+	for i, card := range cards {
+		entry, has := progress.Cards[card.ID]
+		if has && entry.Level == 7 {
+			continue
+		}
+		isDue := !has || !now.Before(entry.NextReviewAt)
+		var ls *time.Time
+		if has {
+			ls = entry.LastReviewAt
+		}
+		c := candidate{cardIdx: i, tqIdx: -1, lastSeen: ls}
+		if isDue {
+			due = append(due, c)
+		} else {
+			notDue = append(notDue, c)
+		}
+	}
+
+	for i, tq := range tqs {
+		entry, has := progress.TQs[tq.ID]
+		if has && entry.Level == 7 {
+			continue
+		}
+		isDue := !has || !now.Before(entry.NextReviewAt)
+		var ls *time.Time
+		if has {
+			ls = entry.LastReviewAt
+		}
+		c := candidate{cardIdx: -1, tqIdx: i, lastSeen: ls}
+		if isDue {
+			due = append(due, c)
+		} else {
+			notDue = append(notDue, c)
+		}
+	}
+
+	rand.Shuffle(len(due), func(i, j int) { due[i], due[j] = due[j], due[i] })
+	sort.Slice(notDue, func(i, j int) bool {
+		if notDue[i].lastSeen == nil {
+			return true
+		}
+		if notDue[j].lastSeen == nil {
+			return false
+		}
+		return notDue[i].lastSeen.Before(*notDue[j].lastSeen)
+	})
+
+	combined := append(due, notDue...)
+	if len(combined) > 7 {
+		combined = combined[:7]
+	}
+
+	items := make([]BlitzItem, 0, len(combined))
+	for _, c := range combined {
+		if c.cardIdx >= 0 {
+			card := cards[c.cardIdx]
+			items = append(items, BlitzItem{Type: "card", Card: &card})
+		} else {
+			tq := tqs[c.tqIdx]
+			items = append(items, BlitzItem{Type: "tq", TQ: &tq})
+		}
+	}
+
+	pool := make([]BlitzCardTerm, len(cards))
+	for i, c := range cards {
+		pool[i] = BlitzCardTerm{ID: c.ID, Term: c.Term}
+	}
+
+	return &BlitzResult{Items: items, CardPool: pool}, nil
+}
+
+func progressApplyAnswer(level int, correct bool, nextReviewAt time.Time) int {
+	if level == 7 {
+		return 7
+	}
+	if correct {
+		if level == 1 {
+			return 2 // always allow level 1 → 2
+		}
+		if time.Now().Before(nextReviewAt) {
+			return level // answered before due date — no level change
+		}
+		return min(level+1, 6)
+	}
+	return max(1, level/2)
+}
+
+func progressApplyConfidence(level int, delta int) int {
+	switch {
+	case delta == 1 && level >= 6:
+		return 7
+	case delta == 1:
+		return level + 1
+	case delta == -1:
+		return max(1, level/2)
+	default:
+		return level
+	}
+}
+
+func progressNextReview(level int) time.Time {
+	now := time.Now()
+	switch level {
+	case 1:
+		return now.AddDate(0, 0, 1)
+	case 2:
+		return now.AddDate(0, 0, 2)
+	case 3:
+		return now.AddDate(0, 0, 7)
+	case 4:
+		return now.AddDate(0, 0, 14)
+	case 5:
+		return now.AddDate(0, 1, 0)
+	case 6:
+		return now.AddDate(0, 6, 0)
+	default:
+		return time.Date(2099, 12, 31, 0, 0, 0, 0, time.UTC)
+	}
 }

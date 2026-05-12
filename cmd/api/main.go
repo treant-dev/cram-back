@@ -84,7 +84,8 @@ func main() {
 	tqRepo := repository.NewTestQuestionRepository(pool)
 	followRepo := repository.NewFollowRepository(pool)
 	studyRepo := repository.NewStudyRepository(pool)
-	cardSvc := service.NewCollectionService(collectionRepo, cardRepo, tqRepo, followRepo, userRepo, studyRepo)
+	progressRepo := repository.NewProgressRepository(pool)
+	cardSvc := service.NewCollectionService(collectionRepo, cardRepo, tqRepo, followRepo, userRepo, studyRepo, progressRepo)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -123,6 +124,8 @@ func main() {
 	cardsHandler := handler.NewCardsHandler(cardSvc)
 	usersHandler := handler.NewUsersHandler(cardSvc)
 	studyHandler := handler.NewStudyHandler(cardSvc)
+	progressHandler := handler.NewProgressHandler(cardSvc)
+	blitzHandler := handler.NewBlitzHandler(cardSvc)
 	adminHandler := handler.NewAdminHandler(cardSvc)
 	accountHandler := handler.NewAccountHandler(cardSvc)
 	shareHandler := handler.NewShareHandler(cardSvc)
@@ -161,6 +164,9 @@ func main() {
 		r.Delete("/collections/{collectionID}/tests/{tqID}", cardsHandler.DeleteTestQuestion)
 		r.Post("/collections/{collectionID}/study", studyHandler.Submit)
 		r.Get("/collections/{collectionID}/history", studyHandler.GetHistory)
+		r.Get("/collections/{collectionID}/progress", progressHandler.Get)
+		r.Post("/collections/{collectionID}/progress", progressHandler.Update)
+		r.Get("/collections/{collectionID}/blitz", blitzHandler.Get)
 		r.With(httprate.LimitByIP(30, time.Minute)).Post("/upload", uploadHandler.Upload)
 		r.Delete("/account", accountHandler.Delete)
 		r.Post("/collections/{collectionID}/share", shareHandler.Generate)

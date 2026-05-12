@@ -19,8 +19,8 @@ func NewStudyRepository(pool *pgxpool.Pool) *StudyRepository {
 type StudyAnswer struct {
 	CardID              string
 	TQID                string
-	Correct             bool     // used for cards (self-assessed)
-	SelectedOptionTexts []string // used for test questions (server-verified)
+	Correct             bool
+	SelectedOptionTexts []string
 }
 
 func optionsCorrect(options []model.TestAnswer, selected []string) bool {
@@ -47,9 +47,8 @@ type StudyHistoryData struct {
 	TQs   map[string][]DailyBucket `json:"test_questions"`
 }
 
-// SubmitSession inserts raw events and upserts aggregate stats in a single transaction.
+// SubmitSession records per-item events for history tracking.
 // Only answers whose card_id/tq_id belong to collectionID are recorded.
-// Answers are processed in order; the last answer per card/tq determines streak direction.
 func (r *StudyRepository) SubmitSession(ctx context.Context, userID, sessionID, collectionID string, answers []StudyAnswer) error {
 	if len(answers) == 0 {
 		return nil
@@ -60,7 +59,6 @@ func (r *StudyRepository) SubmitSession(ctx context.Context, userID, sessionID, 
 	}
 	defer tx.Rollback(ctx)
 
-	// Fetch valid card/tq IDs for this collection to reject cross-collection submissions.
 	validCards := map[string]bool{}
 	cardIDRows, err := tx.Query(ctx, `SELECT id::text FROM cards WHERE collection_id = $1`, collectionID)
 	if err != nil {
@@ -117,14 +115,6 @@ func (r *StudyRepository) SubmitSession(ctx context.Context, userID, sessionID, 
 		aRows.Close()
 	}
 
-	type aggEntry struct {
-		correct     int
-		incorrect   int
-		lastCorrect bool
-	}
-	cardAgg := map[string]*aggEntry{}
-	tqAgg := map[string]*aggEntry{}
-
 	for _, a := range answers {
 		if a.CardID != "" {
 			if !validCards[a.CardID] {
@@ -137,17 +127,6 @@ func (r *StudyRepository) SubmitSession(ctx context.Context, userID, sessionID, 
 			); err != nil {
 				return fmt.Errorf("insert card event: %w", err)
 			}
-			e := cardAgg[a.CardID]
-			if e == nil {
-				e = &aggEntry{}
-				cardAgg[a.CardID] = e
-			}
-			if a.Correct {
-				e.correct++
-			} else {
-				e.incorrect++
-			}
-			e.lastCorrect = a.Correct
 		} else if a.TQID != "" {
 			info, ok := validTQs[a.TQID]
 			if !ok {
@@ -155,105 +134,16 @@ func (r *StudyRepository) SubmitSession(ctx context.Context, userID, sessionID, 
 			}
 			correct := optionsCorrect(info.options, a.SelectedOptionTexts)
 			if _, err = tx.Exec(ctx,
-				`INSERT INTO user_tq_events (user_id, tq_id, session_id, correct)
+				`INSERT INTO user_test_events (user_id, tq_id, session_id, correct)
 				 VALUES ($1, $2, $3, $4)`,
 				userID, a.TQID, sessionID, correct,
 			); err != nil {
 				return fmt.Errorf("insert tq event: %w", err)
 			}
-			e := tqAgg[a.TQID]
-			if e == nil {
-				e = &aggEntry{}
-				tqAgg[a.TQID] = e
-			}
-			if correct {
-				e.correct++
-			} else {
-				e.incorrect++
-			}
-			e.lastCorrect = correct
-		}
-	}
-
-	for cardID, agg := range cardAgg {
-		if _, err = tx.Exec(ctx,
-			`INSERT INTO user_card_stats (user_id, card_id, correct, incorrect, streak, last_seen)
-			 VALUES ($1, $2, $3, $4, CASE WHEN $5 THEN 1 ELSE 0 END, NOW())
-			 ON CONFLICT (user_id, card_id) DO UPDATE SET
-			     correct   = user_card_stats.correct   + EXCLUDED.correct,
-			     incorrect = user_card_stats.incorrect + EXCLUDED.incorrect,
-			     streak    = CASE WHEN $5 THEN user_card_stats.streak + 1 ELSE 0 END,
-			     last_seen = NOW()`,
-			userID, cardID, agg.correct, agg.incorrect, agg.lastCorrect,
-		); err != nil {
-			return fmt.Errorf("upsert card stats: %w", err)
-		}
-	}
-
-	for tqID, agg := range tqAgg {
-		if _, err = tx.Exec(ctx,
-			`INSERT INTO user_tq_stats (user_id, tq_id, correct, incorrect, streak, last_seen)
-			 VALUES ($1, $2, $3, $4, CASE WHEN $5 THEN 1 ELSE 0 END, NOW())
-			 ON CONFLICT (user_id, tq_id) DO UPDATE SET
-			     correct   = user_tq_stats.correct   + EXCLUDED.correct,
-			     incorrect = user_tq_stats.incorrect + EXCLUDED.incorrect,
-			     streak    = CASE WHEN $5 THEN user_tq_stats.streak + 1 ELSE 0 END,
-			     last_seen = NOW()`,
-			userID, tqID, agg.correct, agg.incorrect, agg.lastCorrect,
-		); err != nil {
-			return fmt.Errorf("upsert tq stats: %w", err)
 		}
 	}
 
 	return tx.Commit(ctx)
-}
-
-func (r *StudyRepository) ListCardStats(ctx context.Context, collectionID, userID string) (map[string]model.CardStats, error) {
-	rows, err := r.pool.Query(ctx,
-		`SELECT s.card_id::text, s.correct, s.incorrect, s.streak, s.last_seen
-		 FROM user_card_stats s
-		 JOIN cards c ON c.id = s.card_id
-		 WHERE c.collection_id = $1 AND s.user_id = $2`,
-		collectionID, userID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list card stats: %w", err)
-	}
-	defer rows.Close()
-	result := make(map[string]model.CardStats)
-	for rows.Next() {
-		var id string
-		var s model.CardStats
-		if err := rows.Scan(&id, &s.Correct, &s.Incorrect, &s.Streak, &s.LastSeen); err != nil {
-			return nil, fmt.Errorf("scan card stats: %w", err)
-		}
-		result[id] = s
-	}
-	return result, nil
-}
-
-func (r *StudyRepository) ListTQStats(ctx context.Context, collectionID, userID string) (map[string]model.TQStats, error) {
-	rows, err := r.pool.Query(ctx,
-		`SELECT s.tq_id::text, s.correct, s.incorrect, s.streak, s.last_seen
-		 FROM user_tq_stats s
-		 JOIN test_questions tq ON tq.id = s.tq_id
-		 WHERE tq.collection_id = $1 AND s.user_id = $2`,
-		collectionID, userID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list tq stats: %w", err)
-	}
-	defer rows.Close()
-	result := make(map[string]model.TQStats)
-	for rows.Next() {
-		var id string
-		var s model.TQStats
-		if err := rows.Scan(&id, &s.Correct, &s.Incorrect, &s.Streak, &s.LastSeen); err != nil {
-			return nil, fmt.Errorf("scan tq stats: %w", err)
-		}
-		result[id] = s
-	}
-	return result, nil
 }
 
 func (r *StudyRepository) GetHistory(ctx context.Context, collectionID, userID string, days int) (*StudyHistoryData, error) {
@@ -293,7 +183,7 @@ func (r *StudyRepository) GetHistory(ctx context.Context, collectionID, userID s
 		        TO_CHAR(DATE_TRUNC('day', e.answered_at), 'YYYY-MM-DD'),
 		        COUNT(*) FILTER (WHERE e.correct)::int,
 		        COUNT(*) FILTER (WHERE NOT e.correct)::int
-		 FROM user_tq_events e
+		 FROM user_test_events e
 		 JOIN test_questions tq ON tq.id = e.tq_id
 		 WHERE e.user_id = $1 AND tq.collection_id = $2
 		   AND e.answered_at > NOW() - ($3 * INTERVAL '1 day')

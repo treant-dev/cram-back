@@ -111,8 +111,8 @@ type studyRepo interface {
 
 type progressRepo interface {
 	GetForCollection(ctx context.Context, collectionID, userID string) (*repository.ProgressData, error)
-	GetCardLevel(ctx context.Context, userID, cardID string) int
-	GetTQLevel(ctx context.Context, userID, tqID string) int
+	GetCardProgress(ctx context.Context, userID, cardID string) (int, time.Time)
+	GetTQProgress(ctx context.Context, userID, tqID string) (int, time.Time)
 	UpsertCard(ctx context.Context, userID, cardID string, level int, nextReview time.Time) error
 	UpsertTQ(ctx context.Context, userID, tqID string, level int, nextReview time.Time) error
 }
@@ -532,13 +532,14 @@ func (s *CollectionService) GetProgress(ctx context.Context, collectionID, userI
 // persists it, and returns the resulting level and next review time.
 func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collectionID, itemType, itemID string, correct bool, confidenceDelta int) (int, time.Time, error) {
 	var current int
+	var currentNextReview time.Time
 	if itemType == "card" {
-		current = s.progress.GetCardLevel(ctx, userID, itemID)
+		current, currentNextReview = s.progress.GetCardProgress(ctx, userID, itemID)
 	} else {
-		current = s.progress.GetTQLevel(ctx, userID, itemID)
+		current, currentNextReview = s.progress.GetTQProgress(ctx, userID, itemID)
 	}
 
-	level := progressApplyAnswer(current, correct)
+	level := progressApplyAnswer(current, correct, currentNextReview)
 	level = progressApplyConfidence(level, confidenceDelta)
 	nextReview := progressNextReview(level)
 
@@ -551,11 +552,14 @@ func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collecti
 	return level, nextReview, err
 }
 
-func progressApplyAnswer(level int, correct bool) int {
+func progressApplyAnswer(level int, correct bool, nextReviewAt time.Time) int {
 	if level == 7 {
 		return 7
 	}
 	if correct {
+		if time.Now().Before(nextReviewAt) {
+			return level // answered before due date — no level change
+		}
 		return min(level+1, 6)
 	}
 	return max(1, level/2)

@@ -75,26 +75,28 @@ func (r *ProgressRepository) GetForCollection(ctx context.Context, collectionID,
 	return data, nil
 }
 
-func (r *ProgressRepository) GetCardLevel(ctx context.Context, userID, cardID string) int {
+func (r *ProgressRepository) GetCardProgress(ctx context.Context, userID, cardID string) (int, time.Time) {
 	var level int
+	var nextReview time.Time
 	if err := r.pool.QueryRow(ctx,
-		`SELECT level FROM user_card_progress WHERE user_id = $1 AND card_id = $2`,
+		`SELECT level, next_review_at FROM user_card_progress WHERE user_id = $1 AND card_id = $2`,
 		userID, cardID,
-	).Scan(&level); err != nil {
-		return 1
+	).Scan(&level, &nextReview); err != nil {
+		return 1, time.Time{}
 	}
-	return level
+	return level, nextReview
 }
 
-func (r *ProgressRepository) GetTQLevel(ctx context.Context, userID, tqID string) int {
+func (r *ProgressRepository) GetTQProgress(ctx context.Context, userID, tqID string) (int, time.Time) {
 	var level int
+	var nextReview time.Time
 	if err := r.pool.QueryRow(ctx,
-		`SELECT level FROM user_test_progress WHERE user_id = $1 AND tq_id = $2`,
+		`SELECT level, next_review_at FROM user_test_progress WHERE user_id = $1 AND tq_id = $2`,
 		userID, tqID,
-	).Scan(&level); err != nil {
-		return 1
+	).Scan(&level, &nextReview); err != nil {
+		return 1, time.Time{}
 	}
-	return level
+	return level, nextReview
 }
 
 func (r *ProgressRepository) UpsertCard(ctx context.Context, userID, cardID string, level int, nextReview time.Time) error {

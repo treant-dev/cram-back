@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/treant-dev/cram-go/internal/model"
@@ -110,6 +111,14 @@ type studyRepo interface {
 	GetHistory(ctx context.Context, collectionID, userID string, days int) (*repository.StudyHistoryData, error)
 }
 
+type progressRepo interface {
+	GetForCollection(ctx context.Context, collectionID, userID string) (*repository.ProgressData, error)
+	GetCardLevel(ctx context.Context, userID, cardID string) int
+	GetTQLevel(ctx context.Context, userID, tqID string) int
+	UpsertCard(ctx context.Context, userID, cardID string, level int, nextReview time.Time) error
+	UpsertTQ(ctx context.Context, userID, tqID string, level int, nextReview time.Time) error
+}
+
 type CollectionService struct {
 	collections   collectionRepo
 	cards         cardRepo
@@ -117,6 +126,7 @@ type CollectionService struct {
 	follows       followRepo
 	users         userRepo
 	study         studyRepo
+	progress      progressRepo
 	images        ImageStore
 }
 
@@ -127,6 +137,7 @@ func NewCollectionService(
 	follows *repository.FollowRepository,
 	users *repository.UserRepository,
 	study *repository.StudyRepository,
+	progress *repository.ProgressRepository,
 ) *CollectionService {
 	return &CollectionService{
 		collections:   collections,
@@ -135,6 +146,7 @@ func NewCollectionService(
 		follows:       follows,
 		users:         users,
 		study:         study,
+		progress:      progress,
 	}
 }
 
@@ -526,4 +538,76 @@ func (s *CollectionService) AdminDeleteCollection(ctx context.Context, collectio
 		}
 	}
 	return s.collections.ForceDelete(ctx, collectionID)
+}
+
+// Progress
+
+func (s *CollectionService) GetProgress(ctx context.Context, collectionID, userID string) (*repository.ProgressData, error) {
+	return s.progress.GetForCollection(ctx, collectionID, userID)
+}
+
+// UpdateProgress applies answer result then confidence delta to compute the new level,
+// persists it, and returns the resulting level and next review time.
+func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collectionID, itemType, itemID string, correct bool, confidenceDelta int) (int, time.Time, error) {
+	var current int
+	if itemType == "card" {
+		current = s.progress.GetCardLevel(ctx, userID, itemID)
+	} else {
+		current = s.progress.GetTQLevel(ctx, userID, itemID)
+	}
+
+	level := progressApplyAnswer(current, correct)
+	level = progressApplyConfidence(level, confidenceDelta)
+	nextReview := progressNextReview(level)
+
+	var err error
+	if itemType == "card" {
+		err = s.progress.UpsertCard(ctx, userID, itemID, level, nextReview)
+	} else {
+		err = s.progress.UpsertTQ(ctx, userID, itemID, level, nextReview)
+	}
+	return level, nextReview, err
+}
+
+func progressApplyAnswer(level int, correct bool) int {
+	if level == 7 {
+		return 7
+	}
+	if correct {
+		return min(level+1, 6)
+	}
+	return max(1, level/2)
+}
+
+func progressApplyConfidence(level int, delta int) int {
+	switch {
+	case delta == 1 && level >= 6:
+		return 7
+	case delta == 1:
+		return level + 1
+	case delta == -1:
+		return max(1, level/2)
+	default:
+		return level
+	}
+}
+
+func progressNextReview(level int) time.Time {
+	now := time.Now()
+	switch level {
+	case 1:
+		return now.AddDate(0, 0, 1)
+	case 2:
+		return now.AddDate(0, 0, 2)
+	case 3:
+		return now.AddDate(0, 0, 7)
+	case 4:
+		return now.AddDate(0, 0, 14)
+	case 5:
+		return now.AddDate(0, 1, 0)
+	case 6:
+		return now.AddDate(0, 6, 0)
+	default:
+		return time.Date(2099, 12, 31, 0, 0, 0, 0, time.UTC)
+	}
 }

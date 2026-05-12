@@ -403,7 +403,7 @@ func (r *CollectionRepository) PublishDraft(ctx context.Context, collectionID, u
 	}
 	var draftCards []draftCard
 	cardRows, err := tx.Query(ctx,
-		`SELECT id, source_card_id, term, definition, COALESCE(image, ''), position FROM cards WHERE collection_id=$1`,
+		`SELECT id, source_card_id, term, definition, COALESCE(image, ''), position FROM cards WHERE collection_id=$1 ORDER BY position ASC, created_at ASC`,
 		draftID,
 	)
 	if err != nil {
@@ -460,7 +460,7 @@ func (r *CollectionRepository) PublishDraft(ctx context.Context, collectionID, u
 	}
 	var draftTQs []draftTQ
 	tqRows, err := tx.Query(ctx,
-		`SELECT id::text, source_tq_id::text, question, COALESCE(image, ''), position FROM test_questions WHERE collection_id=$1`,
+		`SELECT id::text, source_tq_id::text, question, COALESCE(image, ''), position FROM test_questions WHERE collection_id=$1 ORDER BY position ASC, created_at ASC`,
 		draftID,
 	)
 	if err != nil {

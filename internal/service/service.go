@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -539,9 +541,18 @@ func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collecti
 		current, currentNextReview = s.progress.GetTQProgress(ctx, userID, itemID)
 	}
 
+	isDue := currentNextReview.IsZero() || !time.Now().Before(currentNextReview)
 	level := progressApplyAnswer(current, correct, currentNextReview)
 	level = progressApplyConfidence(level, confidenceDelta)
-	nextReview := progressNextReview(level)
+
+	// Only update next_review_at when the item was due, reached mastery,
+	// was answered incorrectly, or confidence was lowered.
+	var nextReview time.Time
+	if isDue || level == 7 || !correct || confidenceDelta == -1 {
+		nextReview = progressNextReview(level)
+	} else {
+		nextReview = currentNextReview
+	}
 
 	var err error
 	if itemType == "card" {
@@ -552,11 +563,131 @@ func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collecti
 	return level, nextReview, err
 }
 
+// BlitzItem is one item in a blitz session.
+type BlitzItem struct {
+	Type string              `json:"type"` // "card" or "tq"
+	Card *model.Card         `json:"card,omitempty"`
+	TQ   *model.TestQuestion `json:"tq,omitempty"`
+}
+
+// BlitzCardTerm is a lightweight card entry used for distractor generation on the client.
+type BlitzCardTerm struct {
+	ID   string `json:"ID"`
+	Term string `json:"Term"`
+}
+
+// BlitzResult is the response for GET /collections/{id}/blitz.
+type BlitzResult struct {
+	Items    []BlitzItem     `json:"items"`
+	CardPool []BlitzCardTerm `json:"card_pool"`
+}
+
+// GetBlitz returns up to 7 non-mastered items prioritised by due date,
+// with the due group randomly ordered and the not-yet-due group sorted
+// by last_review_at ASC (oldest reviewed first).
+func (s *CollectionService) GetBlitz(ctx context.Context, collectionID, userID string) (*BlitzResult, error) {
+	cards, err := s.cards.ListByCollection(ctx, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	tqs, err := s.testQuestions.ListByCollection(ctx, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	progress, err := s.progress.GetForCollection(ctx, collectionID, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+
+	type candidate struct {
+		cardIdx  int
+		tqIdx    int
+		lastSeen *time.Time
+	}
+
+	var due, notDue []candidate
+
+	for i, card := range cards {
+		entry, has := progress.Cards[card.ID]
+		if has && entry.Level == 7 {
+			continue
+		}
+		isDue := !has || !now.Before(entry.NextReviewAt)
+		var ls *time.Time
+		if has {
+			ls = entry.LastReviewAt
+		}
+		c := candidate{cardIdx: i, tqIdx: -1, lastSeen: ls}
+		if isDue {
+			due = append(due, c)
+		} else {
+			notDue = append(notDue, c)
+		}
+	}
+
+	for i, tq := range tqs {
+		entry, has := progress.TQs[tq.ID]
+		if has && entry.Level == 7 {
+			continue
+		}
+		isDue := !has || !now.Before(entry.NextReviewAt)
+		var ls *time.Time
+		if has {
+			ls = entry.LastReviewAt
+		}
+		c := candidate{cardIdx: -1, tqIdx: i, lastSeen: ls}
+		if isDue {
+			due = append(due, c)
+		} else {
+			notDue = append(notDue, c)
+		}
+	}
+
+	rand.Shuffle(len(due), func(i, j int) { due[i], due[j] = due[j], due[i] })
+	sort.Slice(notDue, func(i, j int) bool {
+		if notDue[i].lastSeen == nil {
+			return true
+		}
+		if notDue[j].lastSeen == nil {
+			return false
+		}
+		return notDue[i].lastSeen.Before(*notDue[j].lastSeen)
+	})
+
+	combined := append(due, notDue...)
+	if len(combined) > 7 {
+		combined = combined[:7]
+	}
+
+	items := make([]BlitzItem, 0, len(combined))
+	for _, c := range combined {
+		if c.cardIdx >= 0 {
+			card := cards[c.cardIdx]
+			items = append(items, BlitzItem{Type: "card", Card: &card})
+		} else {
+			tq := tqs[c.tqIdx]
+			items = append(items, BlitzItem{Type: "tq", TQ: &tq})
+		}
+	}
+
+	pool := make([]BlitzCardTerm, len(cards))
+	for i, c := range cards {
+		pool[i] = BlitzCardTerm{ID: c.ID, Term: c.Term}
+	}
+
+	return &BlitzResult{Items: items, CardPool: pool}, nil
+}
+
 func progressApplyAnswer(level int, correct bool, nextReviewAt time.Time) int {
 	if level == 7 {
 		return 7
 	}
 	if correct {
+		if level == 1 {
+			return 2 // always allow level 1 → 2
+		}
 		if time.Now().Before(nextReviewAt) {
 			return level // answered before due date — no level change
 		}

@@ -17,8 +17,9 @@ func NewProgressRepository(pool *pgxpool.Pool) *ProgressRepository {
 }
 
 type ProgressEntry struct {
-	Level        int       `json:"level"`
-	NextReviewAt time.Time `json:"next_review_at"`
+	Level        int        `json:"level"`
+	NextReviewAt time.Time  `json:"next_review_at"`
+	LastReviewAt *time.Time `json:"last_review_at,omitempty"`
 }
 
 type ProgressData struct {
@@ -33,7 +34,7 @@ func (r *ProgressRepository) GetForCollection(ctx context.Context, collectionID,
 	}
 
 	cardRows, err := r.pool.Query(ctx,
-		`SELECT p.card_id::text, p.level, p.next_review_at
+		`SELECT p.card_id::text, p.level, p.next_review_at, p.last_review_at
 		 FROM user_card_progress p
 		 JOIN cards c ON c.id = p.card_id
 		 WHERE c.collection_id = $1 AND p.user_id = $2`,
@@ -46,14 +47,14 @@ func (r *ProgressRepository) GetForCollection(ctx context.Context, collectionID,
 	for cardRows.Next() {
 		var id string
 		var e ProgressEntry
-		if err := cardRows.Scan(&id, &e.Level, &e.NextReviewAt); err != nil {
+		if err := cardRows.Scan(&id, &e.Level, &e.NextReviewAt, &e.LastReviewAt); err != nil {
 			return nil, err
 		}
 		data.Cards[id] = e
 	}
 
 	tqRows, err := r.pool.Query(ctx,
-		`SELECT p.tq_id::text, p.level, p.next_review_at
+		`SELECT p.tq_id::text, p.level, p.next_review_at, p.last_review_at
 		 FROM user_test_progress p
 		 JOIN test_questions tq ON tq.id = p.tq_id
 		 WHERE tq.collection_id = $1 AND p.user_id = $2`,
@@ -66,7 +67,7 @@ func (r *ProgressRepository) GetForCollection(ctx context.Context, collectionID,
 	for tqRows.Next() {
 		var id string
 		var e ProgressEntry
-		if err := tqRows.Scan(&id, &e.Level, &e.NextReviewAt); err != nil {
+		if err := tqRows.Scan(&id, &e.Level, &e.NextReviewAt, &e.LastReviewAt); err != nil {
 			return nil, err
 		}
 		data.TQs[id] = e

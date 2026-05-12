@@ -106,8 +106,6 @@ type userRepo interface {
 
 type studyRepo interface {
 	SubmitSession(ctx context.Context, userID, sessionID, collectionID string, answers []repository.StudyAnswer) error
-	ListCardStats(ctx context.Context, collectionID, userID string) (map[string]model.CardStats, error)
-	ListTQStats(ctx context.Context, collectionID, userID string) (map[string]model.TQStats, error)
 	GetHistory(ctx context.Context, collectionID, userID string, days int) (*repository.StudyHistoryData, error)
 }
 
@@ -232,22 +230,6 @@ func (s *CollectionService) GetCollection(ctx context.Context, id, userID string
 	}
 	col.Cards = cards
 	col.TestQuestions = tqs
-
-	// Attach per-user stats (errors are non-fatal; stats are best-effort).
-	if cardStats, err := s.study.ListCardStats(ctx, id, userID); err == nil {
-		for i := range col.Cards {
-			if st, ok := cardStats[col.Cards[i].ID]; ok {
-				col.Cards[i].Stats = &st
-			}
-		}
-	}
-	if tqStats, err := s.study.ListTQStats(ctx, id, userID); err == nil {
-		for i := range col.TestQuestions {
-			if st, ok := tqStats[col.TestQuestions[i].ID]; ok {
-				col.TestQuestions[i].Stats = &st
-			}
-		}
-	}
 
 	// Populate DraftID for the owner so the frontend knows a draft exists.
 	if col.UserID == userID {

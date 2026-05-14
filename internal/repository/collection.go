@@ -128,7 +128,7 @@ func (r *CollectionRepository) ListPublic(ctx context.Context) ([]model.Collecti
 
 func (r *CollectionRepository) ListFollowedByUser(ctx context.Context, userID string) ([]model.Collection, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT c.id, c.user_id, c.title, c.description, c.is_public, c.is_draft, c.draft_of, c.created_at, c.updated_at
+		`SELECT c.id, c.user_id, c.title, c.description, c.is_public, c.is_draft, c.draft_of, c.share_token, c.created_at, c.updated_at
 		 FROM collections c
 		 JOIN collection_follows f ON f.collection_id = c.id
 		 WHERE f.user_id = $1 AND c.is_draft = false

@@ -55,6 +55,7 @@ type collectionRepo interface {
 	ListAllForUsers(ctx context.Context, userIDs []string) (map[string][]model.Collection, error)
 	ListFollowedByUser(ctx context.Context, userID string) ([]model.Collection, error)
 	GetByID(ctx context.Context, id, userID string, isAdmin bool) (*model.Collection, error)
+	GetPublicByID(ctx context.Context, id string) (*model.Collection, error)
 	ExistsForUser(ctx context.Context, id, userID string) (bool, error)
 	Update(ctx context.Context, id, userID, title, description string, isPublic bool) (*model.Collection, error)
 	Delete(ctx context.Context, id, userID string) error
@@ -213,6 +214,27 @@ func (s *CollectionService) ListPublicWithMeta(ctx context.Context, userID strin
 		}
 	}
 	return result, nil
+}
+
+func (s *CollectionService) GetPublicCollection(ctx context.Context, id string) (*model.Collection, error) {
+	col, err := s.collections.GetPublicByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	cards, err := s.cards.ListByCollection(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	tqs, err := s.testQuestions.ListByCollection(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	col.Cards = cards
+	col.TestQuestions = tqs
+	return col, nil
 }
 
 func (s *CollectionService) GetCollection(ctx context.Context, id, userID string, isAdmin bool) (*model.Collection, error) {

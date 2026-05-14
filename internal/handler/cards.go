@@ -299,7 +299,7 @@ func (h *CardsHandler) GetCollection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CardsHandler) GetPublicCollection(w http.ResponseWriter, r *http.Request) {
-	col, err := h.svc.GetCollection(r.Context(), chi.URLParam(r, "collectionID"), "", false)
+	col, err := h.svc.GetPublicCollection(r.Context(), chi.URLParam(r, "collectionID"))
 	if err != nil {
 		handleErr(w, err)
 		return

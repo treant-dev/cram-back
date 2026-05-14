@@ -129,6 +129,7 @@ func main() {
 	adminHandler := handler.NewAdminHandler(cardSvc)
 	accountHandler := handler.NewAccountHandler(cardSvc)
 	shareHandler := handler.NewShareHandler(cardSvc)
+	aiHandler := handler.NewAIHandler()
 
 	s3Store, s3Err := storage.NewS3Store()
 	if s3Err != nil {
@@ -171,6 +172,12 @@ func main() {
 		r.Delete("/account", accountHandler.Delete)
 		r.Post("/collections/{collectionID}/share", shareHandler.Generate)
 		r.Delete("/collections/{collectionID}/share", shareHandler.Revoke)
+	})
+
+	r.Group(func(r chi.Router) {
+		r.Use(apimiddleware.RequireAuth)
+		r.Use(apimiddleware.RequireRole("admin", "pro"))
+		r.With(httprate.LimitByIP(30, time.Minute)).Post("/ai/suggest", aiHandler.SuggestDefinition)
 	})
 
 	r.Group(func(r chi.Router) {

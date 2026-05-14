@@ -298,6 +298,15 @@ func (h *CardsHandler) GetCollection(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, col)
 }
 
+func (h *CardsHandler) GetPublicCollection(w http.ResponseWriter, r *http.Request) {
+	col, err := h.svc.GetCollection(r.Context(), chi.URLParam(r, "collectionID"), "", false)
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, col)
+}
+
 // UpdateCollection godoc
 // @Summary      Update a collection
 // @Tags         collections

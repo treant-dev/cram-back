@@ -14,6 +14,7 @@ import (
 )
 
 var ErrNotFound = errors.New("not found")
+var ErrForbidden = errors.New("forbidden")
 
 // PublicCollectionMeta is a collection enriched with follow data for the market page.
 type PublicCollectionMeta struct {
@@ -347,12 +348,15 @@ func (s *CollectionService) PublishDraft(ctx context.Context, collectionID, user
 // Follows
 
 func (s *CollectionService) Follow(ctx context.Context, userID, collectionID string) error {
-	_, err := s.collections.GetByID(ctx, collectionID, userID, false)
+	col, err := s.collections.GetByID(ctx, collectionID, userID, false)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
+	}
+	if col.UserID == userID {
+		return ErrForbidden
 	}
 	return s.follows.Follow(ctx, userID, collectionID)
 }

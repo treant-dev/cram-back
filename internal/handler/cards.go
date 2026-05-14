@@ -48,6 +48,10 @@ func handleErr(w http.ResponseWriter, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, service.ErrForbidden) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	log.Printf("internal error: %v", err)
 	http.Error(w, "internal error", http.StatusInternalServerError)
 }

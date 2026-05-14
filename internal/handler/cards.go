@@ -48,6 +48,10 @@ func handleErr(w http.ResponseWriter, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, service.ErrForbidden) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	log.Printf("internal error: %v", err)
 	http.Error(w, "internal error", http.StatusInternalServerError)
 }
@@ -287,6 +291,15 @@ func (h *CardsHandler) Unfollow(w http.ResponseWriter, r *http.Request) {
 func (h *CardsHandler) GetCollection(w http.ResponseWriter, r *http.Request) {
 	claims := h.claims(r)
 	col, err := h.svc.GetCollection(r.Context(), chi.URLParam(r, "collectionID"), claims.UserID, claims.Role == "admin")
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, col)
+}
+
+func (h *CardsHandler) GetPublicCollection(w http.ResponseWriter, r *http.Request) {
+	col, err := h.svc.GetPublicCollection(r.Context(), chi.URLParam(r, "collectionID"))
 	if err != nil {
 		handleErr(w, err)
 		return

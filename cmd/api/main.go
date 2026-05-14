@@ -139,6 +139,7 @@ func main() {
 	}
 	uploadHandler := handler.NewUploadHandler(s3Store)
 	r.Get("/public/collections", cardsHandler.ListPublicCollections)
+	r.Get("/public/collections/{collectionID}", cardsHandler.GetPublicCollection)
 	r.Get("/shared/{token}", shareHandler.View)
 	r.Group(func(r chi.Router) {
 		r.Use(apimiddleware.RequireAuth)

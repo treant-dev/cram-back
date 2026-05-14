@@ -58,6 +58,17 @@ func (r *CollectionRepository) ListByUser(ctx context.Context, userID string) ([
 	return collections, nil
 }
 
+func (r *CollectionRepository) GetPublicByID(ctx context.Context, id string) (*model.Collection, error) {
+	c, err := scanCollection(r.pool.QueryRow(ctx,
+		`SELECT `+collectionCols+` FROM collections WHERE id = $1 AND is_public = true AND is_draft = false`,
+		id,
+	).Scan)
+	if err != nil {
+		return nil, fmt.Errorf("get public collection: %w", err)
+	}
+	return &c, nil
+}
+
 func (r *CollectionRepository) GetByID(ctx context.Context, id, userID string, isAdmin bool) (*model.Collection, error) {
 	var c model.Collection
 	var err error

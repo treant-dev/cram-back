@@ -17,25 +17,33 @@ func NewCollectionRepository(pool *pgxpool.Pool) *CollectionRepository {
 	return &CollectionRepository{pool: pool}
 }
 
-const collectionCols = `id, user_id, title, description, is_public, is_draft, draft_of, share_token, created_at, updated_at`
+const collectionCols = `id, user_id, title, description, type, is_public, is_draft, draft_of, share_token, created_at, updated_at`
 
 func scanCollection(scan func(...any) error) (model.Collection, error) {
 	var c model.Collection
-	err := scan(&c.ID, &c.UserID, &c.Title, &c.Description, &c.IsPublic, &c.IsDraft, &c.DraftOf, &c.ShareToken, &c.CreatedAt, &c.UpdatedAt)
+	err := scan(&c.ID, &c.UserID, &c.Title, &c.Description, &c.Type, &c.IsPublic, &c.IsDraft, &c.DraftOf, &c.ShareToken, &c.CreatedAt, &c.UpdatedAt)
 	return c, err
 }
 
-func (r *CollectionRepository) Create(ctx context.Context, userID, title, description string, isPublic bool) (*model.Collection, error) {
+func (r *CollectionRepository) Create(ctx context.Context, userID, title, description, collType string, isPublic bool) (*model.Collection, error) {
 	c, err := scanCollection(r.pool.QueryRow(ctx,
-		`INSERT INTO collections (user_id, title, description, is_public)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO collections (user_id, title, description, type, is_public)
+		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING `+collectionCols,
-		userID, title, description, isPublic,
+		userID, title, description, collType, isPublic,
 	).Scan)
 	if err != nil {
 		return nil, fmt.Errorf("create collection: %w", err)
 	}
 	return &c, nil
+}
+
+// GetType returns a collection's type ("cards" | "tests"), used to enforce that
+// only matching item types are added.
+func (r *CollectionRepository) GetType(ctx context.Context, id string) (string, error) {
+	var t string
+	err := r.pool.QueryRow(ctx, `SELECT type FROM collections WHERE id=$1`, id).Scan(&t)
+	return t, err
 }
 
 func (r *CollectionRepository) ListByUser(ctx context.Context, userID string) ([]model.Collection, error) {
@@ -230,8 +238,8 @@ func (r *CollectionRepository) CreateDraftFrom(ctx context.Context, collectionID
 	defer tx.Rollback(ctx)
 
 	c, err := scanCollection(tx.QueryRow(ctx,
-		`INSERT INTO collections (user_id, title, description, is_public, is_draft, draft_of)
-		 SELECT user_id, title, description, is_public, true, id FROM collections WHERE id=$1 AND user_id=$2
+		`INSERT INTO collections (user_id, title, description, type, is_public, is_draft, draft_of)
+		 SELECT user_id, title, description, type, is_public, true, id FROM collections WHERE id=$1 AND user_id=$2
 		 RETURNING `+collectionCols,
 		collectionID, userID,
 	).Scan)

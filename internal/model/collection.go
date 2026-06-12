@@ -7,6 +7,7 @@ type Collection struct {
 	UserID        string
 	Title         string
 	Description   string
+	Type          string // "cards" | "tests" (future: "exercises")
 	IsPublic      bool
 	IsDraft       bool
 	DraftOf       *string // non-nil for draft collections

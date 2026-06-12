@@ -62,6 +62,16 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 		}
 	}
 
+	// Tests live in their own single-type collection.
+	var testColID string
+	if err = pool.QueryRow(ctx, `
+		INSERT INTO collections (user_id, title, description, type, is_public)
+		VALUES ($1, 'Go Basics (tests)', 'Multiple-choice questions on Go', 'tests', true)
+		RETURNING id`, userID,
+	).Scan(&testColID); err != nil {
+		return "", fmt.Errorf("create test collection: %w", err)
+	}
+
 	questions := []struct {
 		q    string
 		opts []seedOpt
@@ -74,7 +84,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 		var tqID string
 		if err = pool.QueryRow(ctx,
 			`INSERT INTO test_questions (collection_id, question, position) VALUES ($1,$2,$3) RETURNING id::text`,
-			colID, tq.q, i,
+			testColID, tq.q, i,
 		).Scan(&tqID); err != nil {
 			return "", fmt.Errorf("insert test question: %w", err)
 		}
@@ -156,7 +166,7 @@ func seedExtraUsers(ctx context.Context, pool *pgxpool.Pool) error {
 			googleID: "seed_user_bob",
 			email:    "bob@example.com",
 			name:     "Bob Jones",
-			role:     "premium",
+			role:     "pro",
 			cols: []struct {
 				title    string
 				desc     string

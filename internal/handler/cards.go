@@ -52,6 +52,10 @@ func handleErr(w http.ResponseWriter, err error) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	if errors.Is(err, service.ErrInvalidType) {
+		http.Error(w, "invalid collection type for this operation", http.StatusBadRequest)
+		return
+	}
 	log.Printf("internal error: %v", err)
 	http.Error(w, "internal error", http.StatusInternalServerError)
 }
@@ -71,6 +75,7 @@ func (h *CardsHandler) CreateCollection(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		Title       string `json:"title"`
 		Description string `json:"description"`
+		Type        string `json:"type"`
 		IsPublic    bool   `json:"is_public"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Title == "" {
@@ -81,7 +86,7 @@ func (h *CardsHandler) CreateCollection(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "title or description too long", http.StatusBadRequest)
 		return
 	}
-	col, err := h.svc.CreateCollection(r.Context(), h.claims(r).UserID, body.Title, body.Description, body.IsPublic)
+	col, err := h.svc.CreateCollection(r.Context(), h.claims(r).UserID, body.Title, body.Description, body.Type, body.IsPublic)
 	if err != nil {
 		handleErr(w, err)
 		return

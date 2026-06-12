@@ -38,6 +38,7 @@ func (h *ProgressHandler) Update(w http.ResponseWriter, r *http.Request) {
 		ItemID          string `json:"item_id"`
 		Correct         bool   `json:"correct"`
 		ConfidenceDelta int    `json:"confidence_delta"`
+		Retry           bool   `json:"retry"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
@@ -64,6 +65,7 @@ func (h *ProgressHandler) Update(w http.ResponseWriter, r *http.Request) {
 		body.ItemID,
 		body.Correct,
 		body.ConfidenceDelta,
+		body.Retry,
 	)
 	if err != nil {
 		handleErr(w, err)

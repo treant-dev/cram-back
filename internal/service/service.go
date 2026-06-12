@@ -15,6 +15,11 @@ import (
 
 var ErrNotFound = errors.New("not found")
 var ErrForbidden = errors.New("forbidden")
+var ErrInvalidType = errors.New("invalid collection type for this operation")
+
+// validCollectionTypes gates collection creation. Free-text in the DB (like roles) so a
+// future "exercises" type only needs an entry here, no schema change.
+var validCollectionTypes = map[string]bool{"cards": true, "tests": true}
 
 // PublicCollectionMeta is a collection enriched with follow data for the market page.
 type PublicCollectionMeta struct {
@@ -48,7 +53,8 @@ type UpdateDraftReq struct {
 }
 
 type collectionRepo interface {
-	Create(ctx context.Context, userID, title, description string, isPublic bool) (*model.Collection, error)
+	Create(ctx context.Context, userID, title, description, collType string, isPublic bool) (*model.Collection, error)
+	GetType(ctx context.Context, id string) (string, error)
 	ListByUser(ctx context.Context, userID string) ([]model.Collection, error)
 	ListPublic(ctx context.Context) ([]model.Collection, error)
 	ListPublicForUsers(ctx context.Context, userIDs []string) (map[string][]model.Collection, error)
@@ -156,8 +162,14 @@ func (s *CollectionService) SetImageStore(store ImageStore) { s.images = store }
 
 // Collections
 
-func (s *CollectionService) CreateCollection(ctx context.Context, userID, title, description string, isPublic bool) (*model.Collection, error) {
-	return s.collections.Create(ctx, userID, title, description, isPublic)
+func (s *CollectionService) CreateCollection(ctx context.Context, userID, title, description, collType string, isPublic bool) (*model.Collection, error) {
+	if collType == "" {
+		collType = "cards"
+	}
+	if !validCollectionTypes[collType] {
+		return nil, ErrInvalidType
+	}
+	return s.collections.Create(ctx, userID, title, description, collType, isPublic)
 }
 
 func (s *CollectionService) ListCollections(ctx context.Context, userID string) ([]model.Collection, error) {
@@ -301,6 +313,22 @@ func (s *CollectionService) ownsCollection(ctx context.Context, collectionID, us
 	return nil
 }
 
+// ownsCollectionOfType checks ownership and that the collection is of the expected
+// type, so cards can't be added to a tests collection and vice versa.
+func (s *CollectionService) ownsCollectionOfType(ctx context.Context, collectionID, userID, want string) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	t, err := s.collections.GetType(ctx, collectionID)
+	if err != nil {
+		return err
+	}
+	if t != want {
+		return ErrInvalidType
+	}
+	return nil
+}
+
 func (s *CollectionService) loadContent(ctx context.Context, col *model.Collection) error {
 	cards, err := s.cards.ListByCollection(ctx, col.ID)
 	if err != nil {
@@ -425,7 +453,7 @@ func (s *CollectionService) ListUsers(ctx context.Context) ([]UserWithCollection
 // Cards
 
 func (s *CollectionService) AddCard(ctx context.Context, collectionID, userID, term, definition, image string, position int) (*model.Card, error) {
-	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+	if err := s.ownsCollectionOfType(ctx, collectionID, userID, "cards"); err != nil {
 		return nil, err
 	}
 	return s.cards.Create(ctx, collectionID, term, definition, image, position)
@@ -457,14 +485,14 @@ func (s *CollectionService) DeleteCard(ctx context.Context, cardID, collectionID
 }
 
 func (s *CollectionService) ImportCards(ctx context.Context, collectionID, userID string, cards []model.Card) error {
-	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+	if err := s.ownsCollectionOfType(ctx, collectionID, userID, "cards"); err != nil {
 		return err
 	}
 	return s.cards.BulkCreate(ctx, collectionID, cards)
 }
 
 func (s *CollectionService) ImportTests(ctx context.Context, collectionID, userID string, tqs []model.TestQuestion) error {
-	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+	if err := s.ownsCollectionOfType(ctx, collectionID, userID, "tests"); err != nil {
 		return err
 	}
 	return s.testQuestions.BulkCreate(ctx, collectionID, tqs)
@@ -473,7 +501,7 @@ func (s *CollectionService) ImportTests(ctx context.Context, collectionID, userI
 // Test questions
 
 func (s *CollectionService) AddTestQuestion(ctx context.Context, collectionID, userID, question string, options []model.TestAnswer, image string, position int) (*model.TestQuestion, error) {
-	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+	if err := s.ownsCollectionOfType(ctx, collectionID, userID, "tests"); err != nil {
 		return nil, err
 	}
 	return s.testQuestions.Create(ctx, collectionID, question, options, image, position)
@@ -504,7 +532,7 @@ func (s *CollectionService) DeleteTestQuestion(ctx context.Context, tqID, collec
 	return nil
 }
 
-var validRoles = map[string]bool{"user": true, "premium": true, "admin": true}
+var validRoles = map[string]bool{"user": true, "pro": true, "admin": true}
 
 func (s *CollectionService) SetUserRole(ctx context.Context, targetUserID, role string) error {
 	if !validRoles[role] {
@@ -558,7 +586,7 @@ func (s *CollectionService) GetProgress(ctx context.Context, collectionID, userI
 
 // UpdateProgress applies answer result then confidence delta to compute the new level,
 // persists it, and returns the resulting level and next review time.
-func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collectionID, itemType, itemID string, correct bool, confidenceDelta int) (int, time.Time, error) {
+func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collectionID, itemType, itemID string, correct bool, confidenceDelta int, retry bool) (int, time.Time, error) {
 	var current int
 	var currentNextReview time.Time
 	if itemType == "card" {
@@ -568,13 +596,25 @@ func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collecti
 	}
 
 	isDue := currentNextReview.IsZero() || !time.Now().Before(currentNextReview)
-	level := progressApplyAnswer(current, correct, currentNextReview)
-	level = progressApplyConfidence(level, confidenceDelta)
+
+	var level int
+	if retry {
+		// Retry pass (blitz "repeat the mistake"): a correct answer redeems +1
+		// bypassing the due-date gate; a wrong answer is not penalised again.
+		if correct {
+			level = progressRetryBump(current)
+		} else {
+			level = current
+		}
+	} else {
+		level = progressApplyAnswer(current, correct, currentNextReview)
+		level = progressApplyConfidence(level, confidenceDelta)
+	}
 
 	// Only update next_review_at when the item was due, reached mastery,
-	// was answered incorrectly, or confidence was lowered.
+	// was answered incorrectly, confidence was lowered, or this is a retry pass.
 	var nextReview time.Time
-	if isDue || level == 7 || !correct || confidenceDelta == -1 {
+	if isDue || level == 7 || !correct || confidenceDelta == -1 || retry {
 		nextReview = progressNextReview(level)
 	} else {
 		nextReview = currentNextReview
@@ -597,9 +637,11 @@ type BlitzItem struct {
 }
 
 // BlitzCardTerm is a lightweight card entry used for distractor generation on the client.
+// Both Term and Definition are sent so the client can build options in either direction.
 type BlitzCardTerm struct {
-	ID   string `json:"ID"`
-	Term string `json:"Term"`
+	ID         string `json:"ID"`
+	Term       string `json:"Term"`
+	Definition string `json:"Definition"`
 }
 
 // BlitzResult is the response for GET /collections/{id}/blitz.
@@ -700,7 +742,7 @@ func (s *CollectionService) GetBlitz(ctx context.Context, collectionID, userID s
 
 	pool := make([]BlitzCardTerm, len(cards))
 	for i, c := range cards {
-		pool[i] = BlitzCardTerm{ID: c.ID, Term: c.Term}
+		pool[i] = BlitzCardTerm{ID: c.ID, Term: c.Term, Definition: c.Definition}
 	}
 
 	return &BlitzResult{Items: items, CardPool: pool}, nil
@@ -720,6 +762,16 @@ func progressApplyAnswer(level int, correct bool, nextReviewAt time.Time) int {
 		return min(level+1, 6)
 	}
 	return max(1, level/2)
+}
+
+// progressRetryBump redeems a single level on a correct retry answer, ignoring the
+// due-date gate (the item was just answered wrong, so it is never "due"). Capped at 6
+// so a retry cannot reach mastery on its own.
+func progressRetryBump(level int) int {
+	if level == 7 {
+		return 7
+	}
+	return min(level+1, 6)
 }
 
 func progressApplyConfidence(level int, delta int) int {

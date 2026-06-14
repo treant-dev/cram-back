@@ -19,7 +19,7 @@ var ErrInvalidType = errors.New("invalid collection type for this operation")
 
 // validCollectionTypes gates collection creation. Free-text in the DB (like roles) so a
 // future "exercises" type only needs an entry here, no schema change.
-var validCollectionTypes = map[string]bool{"cards": true, "tests": true}
+var validCollectionTypes = map[string]bool{"cards": true, "tests": true, "exercises": true}
 
 // PublicCollectionMeta is a collection enriched with follow data for the market page.
 type PublicCollectionMeta struct {
@@ -96,6 +96,12 @@ type testQuestionRepo interface {
 	BulkCreate(ctx context.Context, collectionID string, tqs []model.TestQuestion) error
 }
 
+type exerciseRepo interface {
+	ListByCollection(ctx context.Context, collectionID string) ([]model.Exercise, error)
+	BulkCreate(ctx context.Context, collectionID string, exercises []model.Exercise) error
+	Delete(ctx context.Context, id, collectionID string) error
+}
+
 type ImageStore interface {
 	DeleteURL(ctx context.Context, url string) error
 	DeleteURLs(ctx context.Context, urls []string)
@@ -125,12 +131,19 @@ type progressRepo interface {
 	GetTQProgress(ctx context.Context, userID, tqID string) (int, time.Time)
 	UpsertCard(ctx context.Context, userID, cardID string, level int, nextReview time.Time) error
 	UpsertTQ(ctx context.Context, userID, tqID string, level int, nextReview time.Time) error
+	RecordSentence(ctx context.Context, userID, sentenceID string, correct bool, submitted []string) error
+	GetResultsForCollection(ctx context.Context, collectionID, userID string) (map[string]repository.SentenceResultEntry, error)
+	ResetCollection(ctx context.Context, collectionID, userID string) error
+	ResetExercise(ctx context.Context, userID, exerciseID string) error
+	ResetCard(ctx context.Context, userID, cardID string) error
+	ResetTQ(ctx context.Context, userID, tqID string) error
 }
 
 type CollectionService struct {
 	collections   collectionRepo
 	cards         cardRepo
 	testQuestions testQuestionRepo
+	exercises     exerciseRepo
 	follows       followRepo
 	users         userRepo
 	study         studyRepo
@@ -142,6 +155,7 @@ func NewCollectionService(
 	collections *repository.CollectionRepository,
 	cards *repository.CardRepository,
 	tq *repository.TestQuestionRepository,
+	exercises *repository.ExerciseRepository,
 	follows *repository.FollowRepository,
 	users *repository.UserRepository,
 	study *repository.StudyRepository,
@@ -151,6 +165,7 @@ func NewCollectionService(
 		collections:   collections,
 		cards:         cards,
 		testQuestions: tq,
+		exercises:     exercises,
 		follows:       follows,
 		users:         users,
 		study:         study,
@@ -244,8 +259,13 @@ func (s *CollectionService) GetPublicCollection(ctx context.Context, id string) 
 	if err != nil {
 		return nil, err
 	}
+	exs, err := s.exercises.ListByCollection(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	col.Cards = cards
 	col.TestQuestions = tqs
+	col.Exercises = exs
 	return col, nil
 }
 
@@ -265,8 +285,13 @@ func (s *CollectionService) GetCollection(ctx context.Context, id, userID string
 	if err != nil {
 		return nil, err
 	}
+	exs, err := s.exercises.ListByCollection(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	col.Cards = cards
 	col.TestQuestions = tqs
+	col.Exercises = exs
 
 	// Populate DraftID for the owner so the frontend knows a draft exists.
 	if col.UserID == userID {
@@ -338,8 +363,13 @@ func (s *CollectionService) loadContent(ctx context.Context, col *model.Collecti
 	if err != nil {
 		return err
 	}
+	exs, err := s.exercises.ListByCollection(ctx, col.ID)
+	if err != nil {
+		return err
+	}
 	col.Cards = cards
 	col.TestQuestions = tests
+	col.Exercises = exs
 	return nil
 }
 
@@ -498,6 +528,20 @@ func (s *CollectionService) ImportTests(ctx context.Context, collectionID, userI
 	return s.testQuestions.BulkCreate(ctx, collectionID, tqs)
 }
 
+func (s *CollectionService) ImportExercises(ctx context.Context, collectionID, userID string, exercises []model.Exercise) error {
+	if err := s.ownsCollectionOfType(ctx, collectionID, userID, "exercises"); err != nil {
+		return err
+	}
+	return s.exercises.BulkCreate(ctx, collectionID, exercises)
+}
+
+func (s *CollectionService) DeleteExercise(ctx context.Context, exID, collectionID, userID string) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	return s.exercises.Delete(ctx, exID, collectionID)
+}
+
 // Test questions
 
 func (s *CollectionService) AddTestQuestion(ctx context.Context, collectionID, userID, question string, options []model.TestAnswer, image string, position int) (*model.TestQuestion, error) {
@@ -584,6 +628,31 @@ func (s *CollectionService) GetProgress(ctx context.Context, collectionID, userI
 	return s.progress.GetForCollection(ctx, collectionID, userID)
 }
 
+// ResetCollectionProgress clears all of the owner's progress for a collection.
+func (s *CollectionService) ResetCollectionProgress(ctx context.Context, collectionID, userID string) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	return s.progress.ResetCollection(ctx, collectionID, userID)
+}
+
+// ResetItemProgress clears the owner's progress for a single card or test question.
+func (s *CollectionService) ResetItemProgress(ctx context.Context, collectionID, userID, itemType, itemID string) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	if itemType == "card" {
+		return s.progress.ResetCard(ctx, userID, itemID)
+	}
+	return s.progress.ResetTQ(ctx, userID, itemID)
+}
+
+// ResetExerciseProgress clears the user's own saved answers for one exercise (retake).
+// Per-user data, so no ownership check — anyone studying the exercise can retake it.
+func (s *CollectionService) ResetExerciseProgress(ctx context.Context, collectionID, userID, exerciseID string) error {
+	return s.progress.ResetExercise(ctx, userID, exerciseID)
+}
+
 // UpdateProgress applies answer result then confidence delta to compute the new level,
 // persists it, and returns the resulting level and next review time.
 func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collectionID, itemType, itemID string, correct bool, confidenceDelta int, retry bool) (int, time.Time, error) {
@@ -627,6 +696,29 @@ func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collecti
 		err = s.progress.UpsertTQ(ctx, userID, itemID, level, nextReview)
 	}
 	return level, nextReview, err
+}
+
+// SentenceResult is one graded sentence from an exercise worksheet.
+type SentenceResult struct {
+	SentenceID string
+	Correct    bool
+	Submitted  []string
+}
+
+// RecordSentenceResults saves each sentence's latest answer (words placed + correctness).
+// Exercises are one-off worksheets — no spaced-repetition. Per-user, no ownership needed.
+func (s *CollectionService) RecordSentenceResults(ctx context.Context, userID string, results []SentenceResult) error {
+	for _, r := range results {
+		if err := s.progress.RecordSentence(ctx, userID, r.SentenceID, r.Correct, r.Submitted); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetExerciseResults returns the user's saved answers for a collection's sentences.
+func (s *CollectionService) GetExerciseResults(ctx context.Context, collectionID, userID string) (map[string]repository.SentenceResultEntry, error) {
+	return s.progress.GetResultsForCollection(ctx, collectionID, userID)
 }
 
 // BlitzItem is one item in a blitz session.

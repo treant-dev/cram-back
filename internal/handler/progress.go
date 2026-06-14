@@ -32,6 +32,42 @@ func (h *ProgressHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, data)
 }
 
+// ResetCollection clears all of the caller's progress for a collection.
+func (h *ProgressHandler) ResetCollection(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.ResetCollectionProgress(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID); err != nil {
+		handleErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ResetCard clears the caller's progress for a single card.
+func (h *ProgressHandler) ResetCard(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.ResetItemProgress(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, "card", chi.URLParam(r, "cardID")); err != nil {
+		handleErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ResetTQ clears the caller's progress for a single test question.
+func (h *ProgressHandler) ResetTQ(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.ResetItemProgress(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, "tq", chi.URLParam(r, "tqID")); err != nil {
+		handleErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ResetExercise clears the caller's progress for all sentences of one exercise.
+func (h *ProgressHandler) ResetExercise(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.ResetExerciseProgress(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, chi.URLParam(r, "exID")); err != nil {
+		handleErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *ProgressHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ItemType        string `json:"item_type"`

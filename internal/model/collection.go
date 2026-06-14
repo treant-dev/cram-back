@@ -7,7 +7,7 @@ type Collection struct {
 	UserID        string
 	Title         string
 	Description   string
-	Type          string // "cards" | "tests" (future: "exercises")
+	Type          string // "cards" | "tests" | "exercises"
 	IsPublic      bool
 	IsDraft       bool
 	DraftOf       *string // non-nil for draft collections
@@ -15,6 +15,7 @@ type Collection struct {
 	ShareToken    *string // non-nil when a share link has been generated
 	Cards         []Card
 	TestQuestions []TestQuestion
+	Exercises     []Exercise
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }

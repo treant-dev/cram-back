@@ -8,8 +8,10 @@ import (
 	"sort"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/treant-dev/cram-go/internal/model"
+	"github.com/treant-dev/cram-go/internal/rank"
 	"github.com/treant-dev/cram-go/internal/repository"
 )
 
@@ -48,13 +50,30 @@ type UpdateDraftReq struct {
 	Title         string
 	Description   string
 	IsPublic      bool
-	Cards         []repository.DraftCardInput
-	TestQuestions []repository.DraftTestInput
+	Cards         []DraftCardInput
+	TestQuestions []DraftTestInput
+}
+
+// DraftCardInput carries card content for a draft update. ID identifies an existing
+// item; empty means insert as new.
+type DraftCardInput struct {
+	ID         string
+	Term       string
+	Definition string
+	Image      string
+}
+
+// DraftTestInput is accepted for API compatibility but ignored — tests are now quiz
+// exercises edited outside the card draft editor.
+type DraftTestInput struct {
+	ID       string
+	Question string
+	Options  []model.TestAnswer
+	Image    string
 }
 
 type collectionRepo interface {
 	Create(ctx context.Context, userID, title, description, collType string, isPublic bool) (*model.Collection, error)
-	GetType(ctx context.Context, id string) (string, error)
 	ListByUser(ctx context.Context, userID string) ([]model.Collection, error)
 	ListPublic(ctx context.Context) ([]model.Collection, error)
 	ListPublicForUsers(ctx context.Context, userIDs []string) (map[string][]model.Collection, error)
@@ -68,38 +87,10 @@ type collectionRepo interface {
 	ForceDelete(ctx context.Context, id string) error
 	ListAllImages(ctx context.Context, collectionID string) ([]string, error)
 	ListUserImages(ctx context.Context, userID string) ([]string, error)
-	// Draft operations
-	GetDraftFor(ctx context.Context, collectionID, userID string) (*model.Collection, error)
-	CreateDraftFrom(ctx context.Context, collectionID, userID string) (*model.Collection, error)
-	UpdateDraftContent(ctx context.Context, draftID, userID, title, description string, isPublic bool, cards []repository.DraftCardInput, tests []repository.DraftTestInput) error
-	PublishDraft(ctx context.Context, collectionID, userID string) error
-	DeleteDraft(ctx context.Context, collectionID, userID string) error
 	// Share token operations
 	GenerateShareToken(ctx context.Context, id, userID string) (string, error)
 	RevokeShareToken(ctx context.Context, id, userID string) error
 	GetByShareToken(ctx context.Context, token string) (*model.Collection, error)
-}
-
-type cardRepo interface {
-	Create(ctx context.Context, collectionID, term, definition, image string, position int) (*model.Card, error)
-	ListByCollection(ctx context.Context, collectionID string) ([]model.Card, error)
-	Update(ctx context.Context, id, collectionID, term, definition, image string, position int) (*model.Card, error)
-	Delete(ctx context.Context, id, collectionID string) (string, error)
-	BulkCreate(ctx context.Context, collectionID string, cards []model.Card) error
-}
-
-type testQuestionRepo interface {
-	Create(ctx context.Context, collectionID, question string, options []model.TestAnswer, image string, position int) (*model.TestQuestion, error)
-	ListByCollection(ctx context.Context, collectionID string) ([]model.TestQuestion, error)
-	Update(ctx context.Context, id, collectionID, question string, options []model.TestAnswer, image string, position int) (*model.TestQuestion, error)
-	Delete(ctx context.Context, id, collectionID string) (string, error)
-	BulkCreate(ctx context.Context, collectionID string, tqs []model.TestQuestion) error
-}
-
-type exerciseRepo interface {
-	ListByCollection(ctx context.Context, collectionID string) ([]model.Exercise, error)
-	BulkCreate(ctx context.Context, collectionID string, exercises []model.Exercise) error
-	Delete(ctx context.Context, id, collectionID string) error
 }
 
 type ImageStore interface {
@@ -120,56 +111,64 @@ type userRepo interface {
 	Delete(ctx context.Context, userID string) error
 }
 
-type studyRepo interface {
-	SubmitSession(ctx context.Context, userID, sessionID, collectionID string, answers []repository.StudyAnswer) error
-	GetHistory(ctx context.Context, collectionID, userID string, days int) (*repository.StudyHistoryData, error)
+type itemRepo interface {
+	Create(ctx context.Context, it model.Item) (*model.Item, error)
+	Get(ctx context.Context, id, collectionID string) (*model.Item, error)
+	ListByCollection(ctx context.Context, collectionID string) ([]model.Item, error)
+	ListByParent(ctx context.Context, parentID string) ([]model.Item, error)
+	Update(ctx context.Context, id, collectionID string, content map[string]any) (*model.Item, error)
+	Delete(ctx context.Context, id, collectionID string) error
+	LastRank(ctx context.Context, collectionID string, parentID *string) (string, error)
 }
 
-type progressRepo interface {
-	GetForCollection(ctx context.Context, collectionID, userID string) (*repository.ProgressData, error)
-	GetCardProgress(ctx context.Context, userID, cardID string) (int, time.Time)
-	GetTQProgress(ctx context.Context, userID, tqID string) (int, time.Time)
-	UpsertCard(ctx context.Context, userID, cardID string, level int, nextReview time.Time) error
-	UpsertTQ(ctx context.Context, userID, tqID string, level int, nextReview time.Time) error
-	RecordSentence(ctx context.Context, userID, sentenceID string, correct bool, submitted []string) error
-	GetResultsForCollection(ctx context.Context, collectionID, userID string) (map[string]repository.SentenceResultEntry, error)
-	ResetCollection(ctx context.Context, collectionID, userID string) error
-	ResetExercise(ctx context.Context, userID, exerciseID string) error
-	ResetCard(ctx context.Context, userID, cardID string) error
-	ResetTQ(ctx context.Context, userID, tqID string) error
+type itemProgressRepo interface {
+	Get(ctx context.Context, userID, itemID string) (*model.ItemProgress, error)
+	Upsert(ctx context.Context, userID, itemID string, level int, nextReviewAt time.Time) error
+	ListByCollection(ctx context.Context, userID, collectionID string) ([]model.ItemProgress, error)
+	ResetOne(ctx context.Context, userID, itemID string) error
+	ResetCollection(ctx context.Context, userID, collectionID string) error
+}
+
+type itemEventRepo interface {
+	Append(ctx context.Context, userID, itemID string, correct *bool, payload map[string]any) error
+	LatestByCollection(ctx context.Context, userID, collectionID string) (map[string]model.ItemEvent, error)
+}
+
+type itemDraftRepo interface {
+	Set(ctx context.Context, d model.ItemDraft) error
+	ListByCollection(ctx context.Context, collectionID string) ([]model.ItemDraft, error)
+	Clear(ctx context.Context, collectionID string) error
+	Publish(ctx context.Context, collectionID string) error
 }
 
 type CollectionService struct {
-	collections   collectionRepo
-	cards         cardRepo
-	testQuestions testQuestionRepo
-	exercises     exerciseRepo
-	follows       followRepo
-	users         userRepo
-	study         studyRepo
-	progress      progressRepo
-	images        ImageStore
+	collections  collectionRepo
+	follows      followRepo
+	users        userRepo
+	items        itemRepo
+	itemProgress itemProgressRepo
+	itemEvents   itemEventRepo
+	itemDrafts   itemDraftRepo
+	images       ImageStore
 }
 
 func NewCollectionService(
 	collections *repository.CollectionRepository,
-	cards *repository.CardRepository,
-	tq *repository.TestQuestionRepository,
-	exercises *repository.ExerciseRepository,
 	follows *repository.FollowRepository,
 	users *repository.UserRepository,
-	study *repository.StudyRepository,
-	progress *repository.ProgressRepository,
+	items *repository.ItemRepository,
+	itemProgress *repository.ItemProgressRepository,
+	itemEvents *repository.ItemEventRepository,
+	itemDrafts *repository.ItemDraftRepository,
 ) *CollectionService {
 	return &CollectionService{
-		collections:   collections,
-		cards:         cards,
-		testQuestions: tq,
-		exercises:     exercises,
-		follows:       follows,
-		users:         users,
-		study:         study,
-		progress:      progress,
+		collections:  collections,
+		follows:      follows,
+		users:        users,
+		items:        items,
+		itemProgress: itemProgress,
+		itemEvents:   itemEvents,
+		itemDrafts:   itemDrafts,
 	}
 }
 
@@ -251,21 +250,12 @@ func (s *CollectionService) GetPublicCollection(ctx context.Context, id string) 
 	if err != nil {
 		return nil, err
 	}
-	cards, err := s.cards.ListByCollection(ctx, id)
+	items, err := s.items.ListByCollection(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	tqs, err := s.testQuestions.ListByCollection(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	exs, err := s.exercises.ListByCollection(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	col.Cards = cards
-	col.TestQuestions = tqs
-	col.Exercises = exs
+	col.Items = items
+	col.Cards, col.TestQuestions, col.Exercises = splitItems(items)
 	return col, nil
 }
 
@@ -277,37 +267,20 @@ func (s *CollectionService) GetCollection(ctx context.Context, id, userID string
 	if err != nil {
 		return nil, err
 	}
-	cards, err := s.cards.ListByCollection(ctx, id)
+	items, err := s.items.ListByCollection(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	tqs, err := s.testQuestions.ListByCollection(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	exs, err := s.exercises.ListByCollection(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	col.Cards = cards
-	col.TestQuestions = tqs
-	col.Exercises = exs
+	col.Items = items
+	col.Cards, col.TestQuestions, col.Exercises = splitItems(items)
 
-	// Populate DraftID for the owner so the frontend knows a draft exists.
+	// Populate DraftID for the owner when staged changes exist (item_draft rows).
 	if col.UserID == userID {
-		if draft, err := s.collections.GetDraftFor(ctx, id, userID); err == nil {
-			col.DraftID = &draft.ID
+		if drafts, err := s.itemDrafts.ListByCollection(ctx, id); err == nil && len(drafts) > 0 {
+			col.DraftID = &col.ID
 		}
 	}
 	return col, nil
-}
-
-func (s *CollectionService) SubmitStudySession(ctx context.Context, userID, sessionID, collectionID string, answers []repository.StudyAnswer) error {
-	return s.study.SubmitSession(ctx, userID, sessionID, collectionID, answers)
-}
-
-func (s *CollectionService) GetStudyHistory(ctx context.Context, collectionID, userID string, days int) (*repository.StudyHistoryData, error) {
-	return s.study.GetHistory(ctx, collectionID, userID, days)
 }
 
 func (s *CollectionService) UpdateCollection(ctx context.Context, id, userID, title, description string, isPublic bool) (*model.Collection, error) {
@@ -338,91 +311,123 @@ func (s *CollectionService) ownsCollection(ctx context.Context, collectionID, us
 	return nil
 }
 
-// ownsCollectionOfType checks ownership and that the collection is of the expected
-// type, so cards can't be added to a tests collection and vice versa.
-func (s *CollectionService) ownsCollectionOfType(ctx context.Context, collectionID, userID, want string) error {
-	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
-		return err
-	}
-	t, err := s.collections.GetType(ctx, collectionID)
-	if err != nil {
-		return err
-	}
-	if t != want {
-		return ErrInvalidType
-	}
-	return nil
-}
-
 func (s *CollectionService) loadContent(ctx context.Context, col *model.Collection) error {
-	cards, err := s.cards.ListByCollection(ctx, col.ID)
+	items, err := s.items.ListByCollection(ctx, col.ID)
 	if err != nil {
 		return err
 	}
-	tests, err := s.testQuestions.ListByCollection(ctx, col.ID)
-	if err != nil {
-		return err
-	}
-	exs, err := s.exercises.ListByCollection(ctx, col.ID)
-	if err != nil {
-		return err
-	}
-	col.Cards = cards
-	col.TestQuestions = tests
-	col.Exercises = exs
+	col.Items = items
+	col.Cards, col.TestQuestions, col.Exercises = splitItems(items)
 	return nil
 }
 
 // Drafts
 
 // GetOrCreateDraft returns the existing draft or creates a new one from the active collection.
+// GetOrCreateDraft returns the collection with the editor's overlay view
+// (live items + staged item_draft). No separate draft collection — the draft is
+// the staging rows, so DraftID is just the collection's own id.
 func (s *CollectionService) GetOrCreateDraft(ctx context.Context, collectionID, userID string) (*model.Collection, error) {
-	draft, err := s.collections.GetDraftFor(ctx, collectionID, userID)
-	if err != nil {
-		// Verify ownership before creating.
-		if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
-			return nil, err
-		}
-		draft, err = s.collections.CreateDraftFrom(ctx, collectionID, userID)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := s.loadContent(ctx, draft); err != nil {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	return draft, nil
+	col, err := s.collections.GetByID(ctx, collectionID, userID, false)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	items, err := s.items.ListByCollection(ctx, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	drafts, err := s.itemDrafts.ListByCollection(ctx, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	overlay := overlayDraft(items, drafts)
+	col.Items = overlay
+	col.Cards, col.TestQuestions, col.Exercises = splitItems(overlay)
+	col.DraftID = &col.ID
+	return col, nil
 }
 
-// UpdateDraft saves draft content without publishing.
+// UpdateDraft stages the full desired card/test content into item_draft (readers
+// still see live items until publish). Rebuilt from scratch each call: upsert every
+// desired item, delete-mark live card/test items no longer present. Exercises are
+// edited directly (YAML import), so they're left untouched here.
 func (s *CollectionService) UpdateDraft(ctx context.Context, collectionID, userID string, req UpdateDraftReq) error {
-	draft, err := s.collections.GetDraftFor(ctx, collectionID, userID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
 	}
+	if _, err := s.collections.Update(ctx, collectionID, userID, req.Title, req.Description, req.IsPublic); err != nil {
+		return err
+	}
+	if err := s.itemDrafts.Clear(ctx, collectionID); err != nil {
+		return err
+	}
+
+	live, err := s.items.ListByCollection(ctx, collectionID)
 	if err != nil {
 		return err
 	}
-	return s.collections.UpdateDraftContent(ctx, draft.ID, userID, req.Title, req.Description, req.IsPublic, req.Cards, req.TestQuestions)
+	liveRank := map[string]string{}
+	liveCardTest := map[string]bool{}
+	for _, it := range live {
+		if it.Type == "card" || it.Type == "test" {
+			liveRank[it.ID] = it.Rank
+			liveCardTest[it.ID] = true
+		}
+	}
+	last, err := s.items.LastRank(ctx, collectionID, nil)
+	if err != nil {
+		return err
+	}
+
+	desired := map[string]bool{}
+	stage := func(id, typ string, content map[string]any) error {
+		rk := liveRank[id]
+		if id == "" {
+			id = uuid.NewString()
+			last = rank.After(last)
+			rk = last
+		}
+		desired[id] = true
+		t := typ
+		return s.itemDrafts.Set(ctx, model.ItemDraft{ItemID: id, CollectionID: collectionID, Op: "upsert", Type: &t, Content: content, Rank: &rk})
+	}
+	for _, c := range req.Cards {
+		if err := stage(c.ID, "card", cardContent(c.Term, c.Definition, c.Image)); err != nil {
+			return err
+		}
+	}
+	// Tests are now quiz exercises (created via "+ Test" / import), not part of the
+	// card draft editor — req.TestQuestions is ignored.
+	for id := range liveCardTest {
+		if !desired[id] {
+			if err := s.itemDrafts.Set(ctx, model.ItemDraft{ItemID: id, CollectionID: collectionID, Op: "delete"}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
-// DiscardDraft deletes the draft.
+// DiscardDraft drops all staged changes.
 func (s *CollectionService) DiscardDraft(ctx context.Context, collectionID, userID string) error {
-	return s.collections.DeleteDraft(ctx, collectionID, userID)
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	return s.itemDrafts.Clear(ctx, collectionID)
 }
 
-// PublishDraft promotes the draft to the active version.
+// PublishDraft applies the staged draft to live items (fires the history trigger).
 func (s *CollectionService) PublishDraft(ctx context.Context, collectionID, userID string) error {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	if err := s.collections.PublishDraft(ctx, collectionID, userID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		return err
-	}
-	return nil
+	return s.itemDrafts.Publish(ctx, collectionID)
 }
 
 // Follows
@@ -482,95 +487,364 @@ func (s *CollectionService) ListUsers(ctx context.Context) ([]UserWithCollection
 
 // Cards
 
+// cardContent builds the JSONB body of a card item; image omitted when empty.
+func cardContent(term, definition, image string) map[string]any {
+	c := map[string]any{"term": term, "definition": definition}
+	if image != "" {
+		c["image"] = image
+	}
+	return c
+}
+
+func str(v any) string { s, _ := v.(string); return s }
+
+// cardFromItem maps a card item back to the legacy Card DTO (handler contract).
+func cardFromItem(it *model.Item) *model.Card {
+	c := &model.Card{
+		ID:         it.ID,
+		Term:       str(it.Content["term"]),
+		Definition: str(it.Content["definition"]),
+		Image:      str(it.Content["image"]),
+		CreatedAt:  it.CreatedAt,
+		UpdatedAt:  it.UpdatedAt,
+	}
+	if it.CollectionID != nil {
+		c.CollectionID = *it.CollectionID
+	}
+	return c
+}
+
+func boolOf(v any) bool { b, _ := v.(bool); return b }
+
+func stringSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, e := range arr {
+		out = append(out, str(e))
+	}
+	return out
+}
+
+func stringMatrix(v any) [][]string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([][]string, 0, len(arr))
+	for _, e := range arr {
+		out = append(out, stringSlice(e))
+	}
+	return out
+}
+
+// parseOptions reads MCQ options from item content (quiz exercises).
+func parseOptions(v any) []model.TestAnswer {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	var out []model.TestAnswer
+	for _, o := range arr {
+		if m, ok := o.(map[string]any); ok {
+			out = append(out, model.TestAnswer{Text: str(m["text"]), IsCorrect: boolOf(m["is_correct"]), Explanation: str(m["explanation"])})
+		}
+	}
+	return out
+}
+
+func sentenceFromItem(it model.Item) model.ExerciseSentence {
+	return model.ExerciseSentence{ID: it.ID, Text: str(it.Content["text"]), Answer: stringSlice(it.Content["answer"]), Distractors: stringMatrix(it.Content["distractors"])}
+}
+
+func exerciseFromItem(it model.Item) model.Exercise {
+	ex := model.Exercise{ID: it.ID, Kind: str(it.Content["kind"]), Title: str(it.Content["title"]), Distractors: stringSlice(it.Content["distractors"]), CreatedAt: it.CreatedAt, UpdatedAt: it.UpdatedAt}
+	if it.CollectionID != nil {
+		ex.CollectionID = *it.CollectionID
+	}
+	if ex.Kind == "quiz" { // a "test" is a quiz exercise: question + options in content
+		ex.Question = str(it.Content["question"])
+		ex.Options = parseOptions(it.Content["options"])
+	}
+	return ex
+}
+
+// splitItems maps unified items to the legacy DTO slices (transitional adapter —
+// removed once the frontend consumes items[] directly). Sentences nest under their
+// parent exercise via ParentID.
+func splitItems(items []model.Item) ([]model.Card, []model.TestQuestion, []model.Exercise) {
+	var cards []model.Card
+	var tests []model.TestQuestion
+	var exercises []model.Exercise
+	for _, it := range items {
+		switch it.Type {
+		case "card":
+			cards = append(cards, *cardFromItem(&it))
+		case "exercise": // includes quiz (former "test")
+			exercises = append(exercises, exerciseFromItem(it))
+		}
+	}
+	byID := make(map[string]*model.Exercise, len(exercises))
+	for i := range exercises {
+		byID[exercises[i].ID] = &exercises[i]
+	}
+	for _, it := range items {
+		if it.Type == "sentence" && it.ParentID != nil {
+			if ex := byID[*it.ParentID]; ex != nil {
+				ex.Sentences = append(ex.Sentences, sentenceFromItem(it))
+			}
+		}
+	}
+	return cards, tests, exercises
+}
+
+func derefStr(p *string) string {
+	if p != nil {
+		return *p
+	}
+	return ""
+}
+
+// overlayDraft applies staged item_draft changes onto the live items — the editor's
+// view. Readers still see plain live items; only the editor sees this overlay.
+func overlayDraft(items []model.Item, drafts []model.ItemDraft) []model.Item {
+	byID := make(map[string]model.Item, len(items))
+	for _, it := range items {
+		byID[it.ID] = it
+	}
+	for _, d := range drafts {
+		switch d.Op {
+		case "delete":
+			delete(byID, d.ItemID)
+		case "upsert":
+			cid := d.CollectionID
+			byID[d.ItemID] = model.Item{ID: d.ItemID, Type: derefStr(d.Type), CollectionID: &cid, ParentID: d.ParentID, Content: d.Content, Rank: derefStr(d.Rank)}
+		}
+	}
+	out := make([]model.Item, 0, len(byID))
+	for _, it := range byID {
+		out = append(out, it)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Rank < out[j].Rank })
+	return out
+}
+
+func testContent(question string, options []model.TestAnswer, image string) map[string]any {
+	opts := make([]map[string]any, 0, len(options))
+	for _, o := range options {
+		m := map[string]any{"text": o.Text, "is_correct": o.IsCorrect}
+		if o.Explanation != "" {
+			m["explanation"] = o.Explanation
+		}
+		opts = append(opts, m)
+	}
+	c := map[string]any{"question": question, "options": opts}
+	if image != "" {
+		c["image"] = image
+	}
+	return c
+}
+
+func exerciseContent(kind, title string, distractors []string) map[string]any {
+	return map[string]any{"kind": kind, "title": title, "distractors": distractors}
+}
+
+func sentenceContent(s model.ExerciseSentence) map[string]any {
+	m := map[string]any{"text": s.Text, "answer": s.Answer}
+	if len(s.Distractors) > 0 {
+		m["distractors"] = s.Distractors
+	}
+	return m
+}
+
 func (s *CollectionService) AddCard(ctx context.Context, collectionID, userID, term, definition, image string, position int) (*model.Card, error) {
-	if err := s.ownsCollectionOfType(ctx, collectionID, userID, "cards"); err != nil {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	return s.cards.Create(ctx, collectionID, term, definition, image, position)
+	last, err := s.items.LastRank(ctx, collectionID, nil)
+	if err != nil {
+		return nil, err
+	}
+	it, err := s.items.Create(ctx, model.Item{
+		Type:         "card",
+		CollectionID: &collectionID,
+		Content:      cardContent(term, definition, image),
+		Rank:         rank.After(last),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return cardFromItem(it), nil
 }
 
 func (s *CollectionService) UpdateCard(ctx context.Context, cardID, collectionID, userID, term, definition, image string, position int) (*model.Card, error) {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	card, err := s.cards.Update(ctx, cardID, collectionID, term, definition, image, position)
+	it, err := s.items.Update(ctx, cardID, collectionID, cardContent(term, definition, image))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	return card, err
+	if err != nil {
+		return nil, err
+	}
+	return cardFromItem(it), nil
 }
 
 func (s *CollectionService) DeleteCard(ctx context.Context, cardID, collectionID, userID string) error {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	imageURL, err := s.cards.Delete(ctx, cardID, collectionID)
-	if err != nil {
+	var imageURL string
+	if it, err := s.items.Get(ctx, cardID, collectionID); err == nil && it != nil {
+		imageURL = str(it.Content["image"])
+	}
+	if err := s.items.Delete(ctx, cardID, collectionID); err != nil {
 		return err
 	}
-	if s.images != nil {
+	if s.images != nil && imageURL != "" {
 		_ = s.images.DeleteURL(ctx, imageURL)
 	}
 	return nil
 }
 
 func (s *CollectionService) ImportCards(ctx context.Context, collectionID, userID string, cards []model.Card) error {
-	if err := s.ownsCollectionOfType(ctx, collectionID, userID, "cards"); err != nil {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	return s.cards.BulkCreate(ctx, collectionID, cards)
+	prev, err := s.items.LastRank(ctx, collectionID, nil)
+	if err != nil {
+		return err
+	}
+	for _, c := range cards {
+		prev = rank.After(prev)
+		if _, err := s.items.Create(ctx, model.Item{
+			Type:         "card",
+			CollectionID: &collectionID,
+			Content:      cardContent(c.Term, c.Definition, c.Image),
+			Rank:         prev,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *CollectionService) ImportTests(ctx context.Context, collectionID, userID string, tqs []model.TestQuestion) error {
-	if err := s.ownsCollectionOfType(ctx, collectionID, userID, "tests"); err != nil {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	return s.testQuestions.BulkCreate(ctx, collectionID, tqs)
+	prev, err := s.items.LastRank(ctx, collectionID, nil)
+	if err != nil {
+		return err
+	}
+	for _, tq := range tqs {
+		prev = rank.After(prev)
+		if _, err := s.items.Create(ctx, model.Item{
+			Type: "exercise", CollectionID: &collectionID,
+			Content: quizContent(tq.Question, tq.Options), Rank: prev,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *CollectionService) ImportExercises(ctx context.Context, collectionID, userID string, exercises []model.Exercise) error {
-	if err := s.ownsCollectionOfType(ctx, collectionID, userID, "exercises"); err != nil {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	return s.exercises.BulkCreate(ctx, collectionID, exercises)
+	prev, err := s.items.LastRank(ctx, collectionID, nil)
+	if err != nil {
+		return err
+	}
+	for _, ex := range exercises {
+		prev = rank.After(prev)
+		exItem, err := s.items.Create(ctx, model.Item{
+			Type: "exercise", CollectionID: &collectionID,
+			Content: exerciseContent(ex.Kind, ex.Title, ex.Distractors), Rank: prev,
+		})
+		if err != nil {
+			return err
+		}
+		sprev := ""
+		for _, sent := range ex.Sentences {
+			sprev = rank.After(sprev)
+			if _, err := s.items.Create(ctx, model.Item{
+				Type: "sentence", CollectionID: &collectionID, ParentID: &exItem.ID,
+				Content: sentenceContent(sent), Rank: sprev,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
+// DeleteExercise removes the exercise item; its sentence children cascade via
+// items.parent_id ON DELETE CASCADE.
 func (s *CollectionService) DeleteExercise(ctx context.Context, exID, collectionID, userID string) error {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	return s.exercises.Delete(ctx, exID, collectionID)
+	return s.items.Delete(ctx, exID, collectionID)
 }
 
 // Test questions
 
+// quizContent builds a quiz exercise body (a "test" is a quiz-kind exercise).
+func quizContent(question string, options []model.TestAnswer) map[string]any {
+	c := testContent(question, options, "")
+	c["kind"] = "quiz"
+	return c
+}
+
 func (s *CollectionService) AddTestQuestion(ctx context.Context, collectionID, userID, question string, options []model.TestAnswer, image string, position int) (*model.TestQuestion, error) {
-	if err := s.ownsCollectionOfType(ctx, collectionID, userID, "tests"); err != nil {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	return s.testQuestions.Create(ctx, collectionID, question, options, image, position)
+	last, err := s.items.LastRank(ctx, collectionID, nil)
+	if err != nil {
+		return nil, err
+	}
+	it, err := s.items.Create(ctx, model.Item{
+		Type: "exercise", CollectionID: &collectionID,
+		Content: quizContent(question, options), Rank: rank.After(last),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &model.TestQuestion{ID: it.ID, CollectionID: collectionID, Question: question, Options: options}, nil
 }
 
 func (s *CollectionService) UpdateTestQuestion(ctx context.Context, tqID, collectionID, userID, question string, options []model.TestAnswer, image string, position int) (*model.TestQuestion, error) {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	tq, err := s.testQuestions.Update(ctx, tqID, collectionID, question, options, image, position)
+	it, err := s.items.Update(ctx, tqID, collectionID, quizContent(question, options))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	return tq, err
+	if err != nil {
+		return nil, err
+	}
+	return &model.TestQuestion{ID: it.ID, CollectionID: collectionID, Question: question, Options: options}, nil
 }
 
 func (s *CollectionService) DeleteTestQuestion(ctx context.Context, tqID, collectionID, userID string) error {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	imageURL, err := s.testQuestions.Delete(ctx, tqID, collectionID)
-	if err != nil {
+	var imageURL string
+	if it, err := s.items.Get(ctx, tqID, collectionID); err == nil && it != nil {
+		imageURL = str(it.Content["image"])
+	}
+	if err := s.items.Delete(ctx, tqID, collectionID); err != nil {
 		return err
 	}
-	if s.images != nil {
+	if s.images != nil && imageURL != "" {
 		_ = s.images.DeleteURL(ctx, imageURL)
 	}
 	return nil
@@ -624,8 +898,21 @@ func (s *CollectionService) AdminDeleteCollection(ctx context.Context, collectio
 
 // Progress
 
+// GetProgress returns the user's card spaced-rep state (cards only; tests/exercises
+// don't track progress). Shaped as legacy ProgressData for the handler contract.
 func (s *CollectionService) GetProgress(ctx context.Context, collectionID, userID string) (*repository.ProgressData, error) {
-	return s.progress.GetForCollection(ctx, collectionID, userID)
+	rows, err := s.itemProgress.ListByCollection(ctx, userID, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	data := &repository.ProgressData{
+		Cards: make(map[string]repository.ProgressEntry, len(rows)),
+		TQs:   map[string]repository.ProgressEntry{},
+	}
+	for _, p := range rows {
+		data.Cards[p.ItemID] = repository.ProgressEntry{Level: p.Level, NextReviewAt: p.NextReviewAt, LastReviewAt: p.LastReviewAt}
+	}
+	return data, nil
 }
 
 // ResetCollectionProgress clears all of the owner's progress for a collection.
@@ -633,35 +920,52 @@ func (s *CollectionService) ResetCollectionProgress(ctx context.Context, collect
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	return s.progress.ResetCollection(ctx, collectionID, userID)
+	return s.itemProgress.ResetCollection(ctx, userID, collectionID)
 }
 
-// ResetItemProgress clears the owner's progress for a single card or test question.
+// ResetItemProgress clears the owner's progress for a single card (tests have none).
 func (s *CollectionService) ResetItemProgress(ctx context.Context, collectionID, userID, itemType, itemID string) error {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return err
 	}
-	if itemType == "card" {
-		return s.progress.ResetCard(ctx, userID, itemID)
+	if itemType != "card" {
+		return nil // only cards carry progress
 	}
-	return s.progress.ResetTQ(ctx, userID, itemID)
+	return s.itemProgress.ResetOne(ctx, userID, itemID)
 }
 
-// ResetExerciseProgress clears the user's own saved answers for one exercise (retake).
-// Per-user data, so no ownership check — anyone studying the exercise can retake it.
+// ResetExerciseProgress "retakes" one exercise: appends a reset marker event per
+// sentence (correct=nil), so the worksheet renders blank while history is kept.
 func (s *CollectionService) ResetExerciseProgress(ctx context.Context, collectionID, userID, exerciseID string) error {
-	return s.progress.ResetExercise(ctx, userID, exerciseID)
+	sentences, err := s.items.ListByParent(ctx, exerciseID)
+	if err != nil {
+		return err
+	}
+	// quiz records its answer on the exercise id itself; bank/choice on child sentence
+	// ids — reset a marker for both so every kind clears.
+	ids := []string{exerciseID}
+	for _, sent := range sentences {
+		ids = append(ids, sent.ID)
+	}
+	for _, id := range ids {
+		if err := s.itemEvents.Append(ctx, userID, id, nil, map[string]any{}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // UpdateProgress applies answer result then confidence delta to compute the new level,
 // persists it, and returns the resulting level and next review time.
 func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collectionID, itemType, itemID string, correct bool, confidenceDelta int, retry bool) (int, time.Time, error) {
-	var current int
-	var currentNextReview time.Time
-	if itemType == "card" {
-		current, currentNextReview = s.progress.GetCardProgress(ctx, userID, itemID)
-	} else {
-		current, currentNextReview = s.progress.GetTQProgress(ctx, userID, itemID)
+	if itemType != "card" {
+		return 0, time.Time{}, nil // only cards carry spaced-rep progress
+	}
+	current, currentNextReview := 1, time.Time{} // default for a card never studied
+	if p, err := s.itemProgress.Get(ctx, userID, itemID); err != nil {
+		return 0, time.Time{}, err
+	} else if p != nil {
+		current, currentNextReview = p.Level, p.NextReviewAt
 	}
 
 	isDue := currentNextReview.IsZero() || !time.Now().Before(currentNextReview)
@@ -689,12 +993,7 @@ func (s *CollectionService) UpdateProgress(ctx context.Context, userID, collecti
 		nextReview = currentNextReview
 	}
 
-	var err error
-	if itemType == "card" {
-		err = s.progress.UpsertCard(ctx, userID, itemID, level, nextReview)
-	} else {
-		err = s.progress.UpsertTQ(ctx, userID, itemID, level, nextReview)
-	}
+	err := s.itemProgress.Upsert(ctx, userID, itemID, level, nextReview)
 	return level, nextReview, err
 }
 
@@ -709,16 +1008,29 @@ type SentenceResult struct {
 // Exercises are one-off worksheets — no spaced-repetition. Per-user, no ownership needed.
 func (s *CollectionService) RecordSentenceResults(ctx context.Context, userID string, results []SentenceResult) error {
 	for _, r := range results {
-		if err := s.progress.RecordSentence(ctx, userID, r.SentenceID, r.Correct, r.Submitted); err != nil {
+		correct := r.Correct
+		if err := s.itemEvents.Append(ctx, userID, r.SentenceID, &correct, map[string]any{"submitted": r.Submitted}); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// GetExerciseResults returns the user's saved answers for a collection's sentences.
+// GetExerciseResults returns the user's latest answer per sentence (from the event
+// log). Reset markers (correct=nil) mean the sentence is blank and are skipped.
 func (s *CollectionService) GetExerciseResults(ctx context.Context, collectionID, userID string) (map[string]repository.SentenceResultEntry, error) {
-	return s.progress.GetResultsForCollection(ctx, collectionID, userID)
+	latest, err := s.itemEvents.LatestByCollection(ctx, userID, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]repository.SentenceResultEntry)
+	for id, e := range latest {
+		if e.Correct == nil {
+			continue
+		}
+		out[id] = repository.SentenceResultEntry{Correct: *e.Correct, Submitted: stringSlice(e.Payload["submitted"])}
+	}
+	return out, nil
 }
 
 // BlitzItem is one item in a blitz session.
@@ -746,15 +1058,13 @@ type BlitzResult struct {
 // with the due group randomly ordered and the not-yet-due group sorted
 // by last_review_at ASC (oldest reviewed first).
 func (s *CollectionService) GetBlitz(ctx context.Context, collectionID, userID string) (*BlitzResult, error) {
-	cards, err := s.cards.ListByCollection(ctx, collectionID)
+	allItems, err := s.items.ListByCollection(ctx, collectionID)
 	if err != nil {
 		return nil, err
 	}
-	tqs, err := s.testQuestions.ListByCollection(ctx, collectionID)
-	if err != nil {
-		return nil, err
-	}
-	progress, err := s.progress.GetForCollection(ctx, collectionID, userID)
+	cards, _, _ := splitItems(allItems)
+
+	prog, err := s.GetProgress(ctx, collectionID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -762,15 +1072,13 @@ func (s *CollectionService) GetBlitz(ctx context.Context, collectionID, userID s
 	now := time.Now()
 
 	type candidate struct {
-		cardIdx  int
-		tqIdx    int
+		idx      int
 		lastSeen *time.Time
 	}
 
 	var due, notDue []candidate
-
 	for i, card := range cards {
-		entry, has := progress.Cards[card.ID]
+		entry, has := prog.Cards[card.ID]
 		if has && entry.Level == 7 {
 			continue
 		}
@@ -779,25 +1087,7 @@ func (s *CollectionService) GetBlitz(ctx context.Context, collectionID, userID s
 		if has {
 			ls = entry.LastReviewAt
 		}
-		c := candidate{cardIdx: i, tqIdx: -1, lastSeen: ls}
-		if isDue {
-			due = append(due, c)
-		} else {
-			notDue = append(notDue, c)
-		}
-	}
-
-	for i, tq := range tqs {
-		entry, has := progress.TQs[tq.ID]
-		if has && entry.Level == 7 {
-			continue
-		}
-		isDue := !has || !now.Before(entry.NextReviewAt)
-		var ls *time.Time
-		if has {
-			ls = entry.LastReviewAt
-		}
-		c := candidate{cardIdx: -1, tqIdx: i, lastSeen: ls}
+		c := candidate{idx: i, lastSeen: ls}
 		if isDue {
 			due = append(due, c)
 		} else {
@@ -821,15 +1111,10 @@ func (s *CollectionService) GetBlitz(ctx context.Context, collectionID, userID s
 		combined = combined[:7]
 	}
 
-	items := make([]BlitzItem, 0, len(combined))
+	blitzItems := make([]BlitzItem, 0, len(combined))
 	for _, c := range combined {
-		if c.cardIdx >= 0 {
-			card := cards[c.cardIdx]
-			items = append(items, BlitzItem{Type: "card", Card: &card})
-		} else {
-			tq := tqs[c.tqIdx]
-			items = append(items, BlitzItem{Type: "tq", TQ: &tq})
-		}
+		card := cards[c.idx]
+		blitzItems = append(blitzItems, BlitzItem{Type: "card", Card: &card})
 	}
 
 	pool := make([]BlitzCardTerm, len(cards))
@@ -837,7 +1122,7 @@ func (s *CollectionService) GetBlitz(ctx context.Context, collectionID, userID s
 		pool[i] = BlitzCardTerm{ID: c.ID, Term: c.Term, Definition: c.Definition}
 	}
 
-	return &BlitzResult{Items: items, CardPool: pool}, nil
+	return &BlitzResult{Items: blitzItems, CardPool: pool}, nil
 }
 
 func progressApplyAnswer(level int, correct bool, nextReviewAt time.Time) int {

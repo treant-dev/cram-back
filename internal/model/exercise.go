@@ -21,11 +21,14 @@ type ExerciseSentence struct {
 type Exercise struct {
 	ID           string             `json:"ID"`
 	CollectionID string             `json:"CollectionID"`
-	Kind         string             `json:"Kind"` // "bank" | "choice"
+	Kind         string             `json:"Kind"` // "bank" | "choice" | "quiz"
 	Title        string             `json:"Title"`
 	Sentences    []ExerciseSentence `json:"Sentences"`
 	Distractors  []string           `json:"Distractors"` // bank only: extra words for the shared pool
-	Position     int                `json:"Position"`
-	CreatedAt    time.Time          `json:"CreatedAt"`
-	UpdatedAt    time.Time          `json:"UpdatedAt"`
+	// quiz only: a multiple-choice question (a "test" is now a quiz exercise).
+	Question string       `json:"Question,omitempty"`
+	Options  []TestAnswer `json:"Options,omitempty"`
+	Position  int         `json:"Position"`
+	CreatedAt time.Time   `json:"CreatedAt"`
+	UpdatedAt time.Time   `json:"UpdatedAt"`
 }

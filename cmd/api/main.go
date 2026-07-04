@@ -80,13 +80,12 @@ func main() {
 
 	userRepo := repository.NewUserRepository(pool)
 	collectionRepo := repository.NewCollectionRepository(pool)
-	cardRepo := repository.NewCardRepository(pool)
-	tqRepo := repository.NewTestQuestionRepository(pool)
-	exerciseRepo := repository.NewExerciseRepository(pool)
 	followRepo := repository.NewFollowRepository(pool)
-	studyRepo := repository.NewStudyRepository(pool)
-	progressRepo := repository.NewProgressRepository(pool)
-	cardSvc := service.NewCollectionService(collectionRepo, cardRepo, tqRepo, exerciseRepo, followRepo, userRepo, studyRepo, progressRepo)
+	itemRepo := repository.NewItemRepository(pool)
+	itemProgressRepo := repository.NewItemProgressRepository(pool)
+	itemEventRepo := repository.NewItemEventRepository(pool)
+	itemDraftRepo := repository.NewItemDraftRepository(pool)
+	cardSvc := service.NewCollectionService(collectionRepo, followRepo, userRepo, itemRepo, itemProgressRepo, itemEventRepo, itemDraftRepo)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -124,7 +123,6 @@ func main() {
 
 	cardsHandler := handler.NewCardsHandler(cardSvc)
 	usersHandler := handler.NewUsersHandler(cardSvc)
-	studyHandler := handler.NewStudyHandler(cardSvc)
 	progressHandler := handler.NewProgressHandler(cardSvc)
 	blitzHandler := handler.NewBlitzHandler(cardSvc)
 	adminHandler := handler.NewAdminHandler(cardSvc)
@@ -169,8 +167,6 @@ func main() {
 		r.Delete("/collections/{collectionID}/exercises/{exID}", cardsHandler.DeleteExercise)
 		r.Post("/collections/{collectionID}/exercises/results", cardsHandler.RecordResults)
 		r.Get("/collections/{collectionID}/exercises/results", cardsHandler.GetResults)
-		r.Post("/collections/{collectionID}/study", studyHandler.Submit)
-		r.Get("/collections/{collectionID}/history", studyHandler.GetHistory)
 		r.Get("/collections/{collectionID}/progress", progressHandler.Get)
 		r.Post("/collections/{collectionID}/progress", progressHandler.Update)
 		r.Delete("/collections/{collectionID}/progress", progressHandler.ResetCollection)

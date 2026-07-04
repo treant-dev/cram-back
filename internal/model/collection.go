@@ -7,15 +7,13 @@ type Collection struct {
 	UserID        string
 	Title         string
 	Description   string
-	Type          string // "cards" | "tests" | "exercises"
 	IsPublic      bool
-	IsDraft       bool
-	DraftOf       *string // non-nil for draft collections
-	DraftID       *string // non-nil for active collections that have a pending draft (not stored in DB)
+	DraftID       *string // non-nil for collections that have a pending item_draft overlay (not stored in DB)
 	ShareToken    *string // non-nil when a share link has been generated
 	Cards         []Card
 	TestQuestions []TestQuestion
 	Exercises     []Exercise
+	Items         []Item // unified content (item-model)
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }

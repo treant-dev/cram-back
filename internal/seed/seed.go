@@ -2,10 +2,12 @@ package seed
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/treant-dev/cram-go/internal/rank"
 )
 
 const (
@@ -20,6 +22,49 @@ const (
 type seedOpt struct {
 	Text      string `json:"text"`
 	IsCorrect bool   `json:"is_correct"`
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+// insertCardItems adds card items to a collection, ranked in order.
+func insertCardItems(ctx context.Context, pool *pgxpool.Pool, colID string, cards [][2]string) error {
+	keys := rank.Sequence(len(cards))
+	for i, c := range cards {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO items (type, collection_id, content, rank) VALUES ('card', $1, $2, $3)`,
+			colID, mustJSON(map[string]any{"term": c[0], "definition": c[1]}), keys[i],
+		); err != nil {
+			return fmt.Errorf("insert card item: %w", err)
+		}
+	}
+	return nil
+}
+
+// insertExercise adds an exercise item + its sentence children (bank/choice kinds).
+func insertExercise(ctx context.Context, pool *pgxpool.Pool, colID, rankKey string, content map[string]any, sentences []map[string]any) error {
+	var exID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO items (type, collection_id, content, rank) VALUES ('exercise', $1, $2, $3) RETURNING id`,
+		colID, mustJSON(content), rankKey,
+	).Scan(&exID); err != nil {
+		return fmt.Errorf("insert exercise: %w", err)
+	}
+	skeys := rank.Sequence(len(sentences))
+	for i, s := range sentences {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO items (type, collection_id, parent_id, content, rank) VALUES ('sentence', $1, $2, $3, $4)`,
+			colID, exID, mustJSON(s), skeys[i],
+		); err != nil {
+			return fmt.Errorf("insert sentence: %w", err)
+		}
+	}
+	return nil
 }
 
 func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
@@ -37,6 +82,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 		return "", fmt.Errorf("clear seed data: %w", err)
 	}
 
+	// Main collection is MIXED: cards + tests together (single-type is gone).
 	var colID string
 	if err = pool.QueryRow(ctx, `
 		INSERT INTO collections (user_id, title, description, is_public)
@@ -53,25 +99,6 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 		{"Zero value of a pointer?", "nil"},
 		{"Which keyword starts a goroutine?", "go"},
 	}
-	for i, c := range cards {
-		if _, err = pool.Exec(ctx,
-			`INSERT INTO cards (collection_id, term, definition, position) VALUES ($1,$2,$3,$4)`,
-			colID, c[0], c[1], i,
-		); err != nil {
-			return "", fmt.Errorf("insert card: %w", err)
-		}
-	}
-
-	// Tests live in their own single-type collection.
-	var testColID string
-	if err = pool.QueryRow(ctx, `
-		INSERT INTO collections (user_id, title, description, type, is_public)
-		VALUES ($1, 'Go Basics (tests)', 'Multiple-choice questions on Go', 'tests', true)
-		RETURNING id`, userID,
-	).Scan(&testColID); err != nil {
-		return "", fmt.Errorf("create test collection: %w", err)
-	}
-
 	questions := []struct {
 		q    string
 		opts []seedOpt
@@ -80,22 +107,49 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 		{"What is the default value of an int in Go?", []seedOpt{{"0", true}, {"nil", false}, {"undefined", false}, {"-1", false}}},
 		{"Which keyword starts a goroutine?", []seedOpt{{"go", true}, {"async", false}, {"goroutine", false}, {"spawn", false}}},
 	}
+
+	keys := rank.Sequence(len(cards) + len(questions))
+	for i, c := range cards {
+		if _, err = pool.Exec(ctx,
+			`INSERT INTO items (type, collection_id, content, rank) VALUES ('card', $1, $2, $3)`,
+			colID, mustJSON(map[string]any{"term": c[0], "definition": c[1]}), keys[i],
+		); err != nil {
+			return "", fmt.Errorf("insert card item: %w", err)
+		}
+	}
 	for i, tq := range questions {
-		var tqID string
-		if err = pool.QueryRow(ctx,
-			`INSERT INTO test_questions (collection_id, question, position) VALUES ($1,$2,$3) RETURNING id::text`,
-			testColID, tq.q, i,
-		).Scan(&tqID); err != nil {
-			return "", fmt.Errorf("insert test question: %w", err)
+		opts := make([]map[string]any, len(tq.opts))
+		for j, o := range tq.opts {
+			opts[j] = map[string]any{"text": o.Text, "is_correct": o.IsCorrect}
 		}
-		for j, opt := range tq.opts {
-			if _, err = pool.Exec(ctx,
-				`INSERT INTO test_answers (test_question_id, text, is_correct, position) VALUES ($1,$2,$3,$4)`,
-				tqID, opt.Text, opt.IsCorrect, j,
-			); err != nil {
-				return "", fmt.Errorf("insert test answer: %w", err)
-			}
+		if _, err = pool.Exec(ctx,
+			`INSERT INTO items (type, collection_id, content, rank) VALUES ('exercise', $1, $2, $3)`,
+			colID, mustJSON(map[string]any{"kind": "quiz", "question": tq.q, "options": opts}), keys[len(cards)+i],
+		); err != nil {
+			return "", fmt.Errorf("insert quiz item: %w", err)
 		}
+	}
+
+	// bank + choice exercises (Go-themed) so Go Basics has every exercise kind.
+	exRank := rank.After(keys[len(keys)-1])
+	if err = insertExercise(ctx, pool, colID, exRank,
+		map[string]any{"kind": "bank", "title": "Go keywords", "distractors": []string{"func"}},
+		[]map[string]any{
+			{"text": "Start a goroutine with the ___ keyword.", "answer": []string{"go"}},
+			{"text": "Schedule a cleanup call with ___.", "answer": []string{"defer"}},
+		},
+	); err != nil {
+		return "", err
+	}
+	exRank = rank.After(exRank)
+	if err = insertExercise(ctx, pool, colID, exRank,
+		map[string]any{"kind": "choice", "title": "Go basics", "distractors": []string{}},
+		[]map[string]any{
+			{"text": "The zero value of a pointer is ___.", "answer": []string{"nil"}, "distractors": [][]string{{"0", "undefined"}}},
+			{"text": "A slice's length is given by ___(s).", "answer": []string{"len"}, "distractors": [][]string{{"cap", "size"}}},
+		},
+	); err != nil {
+		return "", err
 	}
 
 	// Private collection for dev user
@@ -107,17 +161,11 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 	).Scan(&privateColID); err != nil {
 		return "", fmt.Errorf("create private collection: %w", err)
 	}
-	privateCards := [][2]string{
+	if err = insertCardItems(ctx, pool, privateColID, [][2]string{
 		{"Secret key 1", "Secret answer 1"},
 		{"Secret key 2", "Secret answer 2"},
-	}
-	for i, c := range privateCards {
-		if _, err = pool.Exec(ctx,
-			`INSERT INTO cards (collection_id, term, definition, position) VALUES ($1,$2,$3,$4)`,
-			privateColID, c[0], c[1], i,
-		); err != nil {
-			return "", fmt.Errorf("insert private card: %w", err)
-		}
+	}); err != nil {
+		return "", err
 	}
 
 	if err = seedExtraUsers(ctx, pool); err != nil {
@@ -129,33 +177,24 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 }
 
 func seedExtraUsers(ctx context.Context, pool *pgxpool.Pool) error {
+	type col struct {
+		title    string
+		desc     string
+		isPublic bool
+		cards    [][2]string
+	}
 	extras := []struct {
 		googleID string
 		email    string
 		name     string
 		role     string
-		cols     []struct {
-			title    string
-			desc     string
-			isPublic bool
-			cards    [][2]string
-		}
+		cols     []col
 	}{
 		{
-			googleID: "seed_user_alice",
-			email:    "alice@example.com",
-			name:     "Alice Smith",
-			role:     "user",
-			cols: []struct {
-				title    string
-				desc     string
-				isPublic bool
-				cards    [][2]string
-			}{
+			googleID: "seed_user_alice", email: "alice@example.com", name: "Alice Smith", role: "user",
+			cols: []col{
 				{"French Vocabulary", "Basic French words", true, [][2]string{
-					{"Bonjour", "Hello"},
-					{"Merci", "Thank you"},
-					{"Au revoir", "Goodbye"},
+					{"Bonjour", "Hello"}, {"Merci", "Thank you"}, {"Au revoir", "Goodbye"},
 				}},
 				{"Alice's Private Deck", "Private study material", false, [][2]string{
 					{"Private card", "Private answer"},
@@ -163,16 +202,8 @@ func seedExtraUsers(ctx context.Context, pool *pgxpool.Pool) error {
 			},
 		},
 		{
-			googleID: "seed_user_bob",
-			email:    "bob@example.com",
-			name:     "Bob Jones",
-			role:     "pro",
-			cols: []struct {
-				title    string
-				desc     string
-				isPublic bool
-				cards    [][2]string
-			}{
+			googleID: "seed_user_bob", email: "bob@example.com", name: "Bob Jones", role: "pro",
+			cols: []col{
 				{"Math Formulas", "Essential math formulas", true, [][2]string{
 					{"Area of a circle", "π × r²"},
 					{"Pythagorean theorem", "a² + b² = c²"},
@@ -181,11 +212,8 @@ func seedExtraUsers(ctx context.Context, pool *pgxpool.Pool) error {
 			},
 		},
 		{
-			googleID: "seed_user_carol",
-			email:    "carol@example.com",
-			name:     "Carol White",
-			role:     "user",
-			cols:     nil,
+			googleID: "seed_user_carol", email: "carol@example.com", name: "Carol White", role: "user",
+			cols: nil,
 		},
 	}
 
@@ -205,22 +233,17 @@ func seedExtraUsers(ctx context.Context, pool *pgxpool.Pool) error {
 			return fmt.Errorf("clear extra user collections: %w", err)
 		}
 
-		for _, col := range u.cols {
+		for _, c := range u.cols {
 			var colID string
 			if err := pool.QueryRow(ctx, `
 				INSERT INTO collections (user_id, title, description, is_public)
 				VALUES ($1, $2, $3, $4) RETURNING id`,
-				uid, col.title, col.desc, col.isPublic,
+				uid, c.title, c.desc, c.isPublic,
 			).Scan(&colID); err != nil {
 				return fmt.Errorf("create extra collection: %w", err)
 			}
-			for i, c := range col.cards {
-				if _, err := pool.Exec(ctx,
-					`INSERT INTO cards (collection_id, term, definition, position) VALUES ($1,$2,$3,$4)`,
-					colID, c[0], c[1], i,
-				); err != nil {
-					return fmt.Errorf("insert extra card: %w", err)
-				}
+			if err := insertCardItems(ctx, pool, colID, c.cards); err != nil {
+				return err
 			}
 		}
 		log.Printf("seed: extra user %s (%s)", u.name, uid)

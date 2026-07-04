@@ -1,10 +1,11 @@
 package handler
 
 import (
-	"encoding/csv"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -13,8 +14,8 @@ import (
 	"github.com/treant-dev/cram-go/internal/auth"
 	"github.com/treant-dev/cram-go/internal/middleware"
 	"github.com/treant-dev/cram-go/internal/model"
-	"github.com/treant-dev/cram-go/internal/repository"
 	"github.com/treant-dev/cram-go/internal/service"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -209,10 +210,10 @@ func (h *CardsHandler) UpdateDraft(w http.ResponseWriter, r *http.Request) {
 		IsPublic:    body.IsPublic,
 	}
 	for _, c := range body.Cards {
-		req.Cards = append(req.Cards, repository.DraftCardInput{ID: c.ID, Term: c.Term, Definition: c.Definition, Image: c.Image})
+		req.Cards = append(req.Cards, service.DraftCardInput{ID: c.ID, Term: c.Term, Definition: c.Definition, Image: c.Image})
 	}
 	for _, t := range body.TestQuestions {
-		req.TestQuestions = append(req.TestQuestions, repository.DraftTestInput{ID: t.ID, Question: t.Question, Options: t.Options, Image: t.Image})
+		req.TestQuestions = append(req.TestQuestions, service.DraftTestInput{ID: t.ID, Question: t.Question, Options: t.Options, Image: t.Image})
 	}
 	if err := h.svc.UpdateDraft(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, req); err != nil {
 		handleErr(w, err)
@@ -447,53 +448,155 @@ func (h *CardsHandler) DeleteCard(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// readImportCSV parses a semicolon-separated import file. LazyQuotes tolerates
+// bare " characters common in language content, and FieldsPerRecord = -1 lets
+// rows have varying column counts so one ragged row can't fail the whole file.
+// looksStructured reports whether an import body is JSON/YAML rather than CSV,
+// based on the first non-space byte: '[' / '{' (JSON or flow YAML), or a YAML
+// block-list item "- " / document marker "---". A CSV value that merely starts
+// with '-' (e.g. "-5 degrees;cold") is not a list item, so it stays CSV. The two
+// formats are unambiguous in practice.
+func looksStructured(raw []byte) bool {
+	t := bytes.TrimSpace(raw)
+	if len(t) == 0 {
+		return false
+	}
+	switch t[0] {
+	case '[', '{':
+		return true
+	case '-':
+		return len(t) > 1 && (t[1] == ' ' || t[1] == '\t' || t[1] == '\n' || t[1] == '\r' || t[1] == '-')
+	}
+	return false
+}
+
+// cardImport / testImport mirror the JSON/YAML import shapes (yaml.v3 parses both,
+// since JSON is a subset of YAML). They use the user-facing question/answer
+// vocabulary rather than the model's term/definition.
+type cardImport struct {
+	Question string `yaml:"question"`
+	Answer   string `yaml:"answer"`
+}
+
+type testImport struct {
+	Question string `yaml:"question"`
+	Options  []struct {
+		Text    string `yaml:"text"`
+		Correct bool   `yaml:"correct"`
+	} `yaml:"options"`
+}
+
+// parseCardImport reads cards from a CSV (term;definition) or JSON/YAML list of
+// {question, answer}. Invalid entries are skipped (counted), matching the
+// exercises importer rather than failing the whole file.
+func parseCardImport(raw []byte) (cards []model.Card, skipped int, err error) {
+	if looksStructured(raw) {
+		var items []cardImport
+		if err := yaml.Unmarshal(raw, &items); err != nil {
+			return nil, 0, errors.New("invalid json/yaml")
+		}
+		for _, it := range items {
+			q := strings.TrimSpace(it.Question)
+			a := strings.TrimSpace(it.Answer)
+			if q == "" || a == "" {
+				skipped++
+				continue
+			}
+			cards = append(cards, model.Card{Term: q, Definition: a})
+		}
+		return cards, skipped, nil
+	}
+
+	return nil, 0, errors.New("import must be a JSON or YAML list of {question, answer}")
+}
+
+// parseTestImport reads test questions from a CSV (question;flag;option;flag;option;…)
+// or JSON/YAML list of {question, options:[{text, correct}]}. A valid question needs
+// ≥2 options and at least one marked correct; invalid ones are skipped (counted).
+func parseTestImport(raw []byte) (tqs []model.TestQuestion, skipped int, err error) {
+	add := func(q string, opts []model.TestAnswer) {
+		if q == "" || len(opts) < 2 || !hasCorrectOption(opts) {
+			skipped++
+			return
+		}
+		tqs = append(tqs, model.TestQuestion{Question: q, Options: opts})
+	}
+
+	if looksStructured(raw) {
+		var items []testImport
+		if err := yaml.Unmarshal(raw, &items); err != nil {
+			return nil, 0, errors.New("invalid json/yaml")
+		}
+		for _, it := range items {
+			var opts []model.TestAnswer
+			for _, o := range it.Options {
+				text := strings.TrimSpace(o.Text)
+				if text == "" {
+					continue
+				}
+				opts = append(opts, model.TestAnswer{Text: text, IsCorrect: o.Correct})
+			}
+			add(strings.TrimSpace(it.Question), opts)
+		}
+		return tqs, skipped, nil
+	}
+
+	return nil, 0, errors.New("import must be a JSON or YAML list of {question, options}")
+}
+
+func hasCorrectOption(opts []model.TestAnswer) bool {
+	for _, o := range opts {
+		if o.IsCorrect {
+			return true
+		}
+	}
+	return false
+}
+
+// readImportBody reads the uploaded "file" form field up to maxFileSize bytes.
+func readImportBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	const maxFileSize = 4 << 20 // 4 MB
+	if err := r.ParseMultipartForm(maxFileSize); err != nil {
+		http.Error(w, "file too large", http.StatusBadRequest)
+		return nil, false
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "missing file", http.StatusBadRequest)
+		return nil, false
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, maxFileSize))
+	if err != nil {
+		http.Error(w, "could not read file", http.StatusBadRequest)
+		return nil, false
+	}
+	return raw, true
+}
+
 // ImportCSV godoc
-// @Summary      Bulk import cards from CSV (question,answer)
+// @Summary      Bulk import cards from CSV (question;answer) or a JSON/YAML list
 // @Tags         cards
 // @Accept       multipart/form-data
 // @Produce      json
 // @Security     BearerAuth
 // @Param        collectionID path string true "Collection ID"
-// @Param        file formData file true "CSV file"
-// @Success      201 {object} object{imported=int}
+// @Param        file formData file true "CSV / JSON / YAML file"
+// @Success      201 {object} object{imported=int,skipped=int}
 // @Failure      400 {string} string
 // @Router       /collections/{collectionID}/cards/import [post]
 func (h *CardsHandler) ImportCSV(w http.ResponseWriter, r *http.Request) {
-	const maxFileSize = 4 << 20 // 4 MB
-	if err := r.ParseMultipartForm(maxFileSize); err != nil {
-		http.Error(w, "file too large", http.StatusBadRequest)
+	raw, ok := readImportBody(w, r)
+	if !ok {
 		return
 	}
-	file, _, err := r.FormFile("file")
+	cards, skipped, err := parseCardImport(raw)
 	if err != nil {
-		http.Error(w, "missing file", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
-
-	r2 := csv.NewReader(file)
-	r2.Comma = ';'
-	records, err := r2.ReadAll()
-	if err != nil {
-		http.Error(w, "invalid csv", http.StatusBadRequest)
-		return
-	}
-
-	var cards []model.Card
-	for _, row := range records {
-		if len(row) < 2 {
-			continue
-		}
-		q := strings.TrimSpace(row[0])
-		a := strings.TrimSpace(row[1])
-		if q == "" || a == "" {
-			continue
-		}
-		cards = append(cards, model.Card{Term: q, Definition: a})
-	}
-
 	if len(cards) == 0 {
-		http.Error(w, "no valid rows in csv", http.StatusBadRequest)
+		http.Error(w, "no valid cards in file", http.StatusBadRequest)
 		return
 	}
 	if len(cards) > maxCSVRows {
@@ -505,78 +608,35 @@ func (h *CardsHandler) ImportCSV(w http.ResponseWriter, r *http.Request) {
 		handleErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]int{"imported": len(cards)})
+	writeJSON(w, http.StatusCreated, map[string]int{"imported": len(cards), "skipped": skipped})
 }
 
 // ImportTests godoc
-// @Summary      Bulk import test questions from semicolon-separated text
+// @Summary      Bulk import test questions from CSV or a JSON/YAML list
 // @Router       /collections/{collectionID}/tests/import [post]
 func (h *CardsHandler) ImportTests(w http.ResponseWriter, r *http.Request) {
-	const maxFileSize = 4 << 20
-	if err := r.ParseMultipartForm(maxFileSize); err != nil {
-		http.Error(w, "file too large", http.StatusBadRequest)
+	raw, ok := readImportBody(w, r)
+	if !ok {
 		return
 	}
-	file, _, err := r.FormFile("file")
+	tqs, skipped, err := parseTestImport(raw)
 	if err != nil {
-		http.Error(w, "missing file", http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
-
-	rd := csv.NewReader(file)
-	rd.Comma = ';'
-	rd.FieldsPerRecord = -1 // variable columns
-	records, err := rd.ReadAll()
-	if err != nil {
-		http.Error(w, "invalid csv", http.StatusBadRequest)
-		return
-	}
-
-	var tqs []model.TestQuestion
-	for _, row := range records {
-		if len(row) < 5 || (len(row)-1)%2 != 0 {
-			continue
-		}
-		q := strings.TrimSpace(row[0])
-		if q == "" {
-			continue
-		}
-		var opts []model.TestAnswer
-		for i := 1; i+1 < len(row); i += 2 {
-			raw := strings.ToLower(strings.TrimSpace(row[i]))
-			isCorrect := raw == "1" || raw == "t" || raw == "true"
-			text := strings.TrimSpace(row[i+1])
-			if text == "" {
-				continue
-			}
-			opts = append(opts, model.TestAnswer{Text: text, IsCorrect: isCorrect})
-		}
-		if len(opts) < 2 {
-			continue
-		}
-		hasCorrect := false
-		for _, o := range opts {
-			if o.IsCorrect {
-				hasCorrect = true
-				break
-			}
-		}
-		if !hasCorrect {
-			continue
-		}
-		tqs = append(tqs, model.TestQuestion{Question: q, Options: opts})
-	}
-
 	if len(tqs) == 0 {
-		http.Error(w, "no valid rows", http.StatusBadRequest)
+		http.Error(w, "no valid questions in file", http.StatusBadRequest)
+		return
+	}
+	if len(tqs) > maxCSVRows {
+		http.Error(w, fmt.Sprintf("too many rows (max %d)", maxCSVRows), http.StatusBadRequest)
 		return
 	}
 	if err := h.svc.ImportTests(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, tqs); err != nil {
 		handleErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]int{"imported": len(tqs)})
+	writeJSON(w, http.StatusCreated, map[string]int{"imported": len(tqs), "skipped": skipped})
 }
 
 // AddTestQuestion godoc

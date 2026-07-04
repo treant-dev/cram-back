@@ -315,7 +315,7 @@ const docTemplate = `{
                 "tags": [
                     "cards"
                 ],
-                "summary": "Bulk import cards from CSV (question,answer)",
+                "summary": "Bulk import cards from CSV (question;answer) or a JSON/YAML list",
                 "parameters": [
                     {
                         "type": "string",
@@ -326,7 +326,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "file",
-                        "description": "CSV file",
+                        "description": "CSV / JSON / YAML file",
                         "name": "file",
                         "in": "formData",
                         "required": true
@@ -339,6 +339,9 @@ const docTemplate = `{
                             "type": "object",
                             "properties": {
                                 "imported": {
+                                    "type": "integer"
+                                },
+                                "skipped": {
                                     "type": "integer"
                                 }
                             }
@@ -612,6 +615,53 @@ const docTemplate = `{
                 }
             }
         },
+        "/collections/{collectionID}/exercises/import": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "text/plain"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "exercises"
+                ],
+                "summary": "Bulk import exercises from a YAML document",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Collection ID",
+                        "name": "collectionID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "imported": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/collections/{collectionID}/follow": {
             "post": {
                 "security": [
@@ -706,7 +756,7 @@ const docTemplate = `{
                                 "options": {
                                     "type": "array",
                                     "items": {
-                                        "$ref": "#/definitions/model.TestOption"
+                                        "$ref": "#/definitions/model.TestAnswer"
                                     }
                                 },
                                 "position": {
@@ -733,6 +783,12 @@ const docTemplate = `{
                         }
                     }
                 }
+            }
+        },
+        "/collections/{collectionID}/tests/import": {
+            "post": {
+                "summary": "Bulk import test questions from CSV or a JSON/YAML list",
+                "responses": {}
             }
         },
         "/collections/{collectionID}/tests/{tqID}": {
@@ -778,7 +834,7 @@ const docTemplate = `{
                                 "options": {
                                     "type": "array",
                                     "items": {
-                                        "$ref": "#/definitions/model.TestOption"
+                                        "$ref": "#/definitions/model.TestAnswer"
                                     }
                                 },
                                 "position": {
@@ -930,22 +986,25 @@ const docTemplate = `{
         "model.Card": {
             "type": "object",
             "properties": {
-                "answer": {
-                    "type": "string"
-                },
                 "collectionID": {
                     "type": "string"
                 },
                 "createdAt": {
                     "type": "string"
                 },
+                "definition": {
+                    "type": "string"
+                },
                 "id": {
+                    "type": "string"
+                },
+                "image": {
                     "type": "string"
                 },
                 "position": {
                     "type": "integer"
                 },
-                "question": {
+                "term": {
                     "type": "string"
                 },
                 "updatedAt": {
@@ -969,21 +1028,31 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "draftID": {
-                    "description": "non-nil for active collections that have a pending draft (not stored in DB)",
+                    "description": "non-nil for collections that have a pending item_draft overlay (not stored in DB)",
                     "type": "string"
                 },
-                "draftOf": {
-                    "description": "non-nil for draft collections",
-                    "type": "string"
+                "exercises": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Exercise"
+                    }
                 },
                 "id": {
                     "type": "string"
                 },
-                "isDraft": {
-                    "type": "boolean"
-                },
                 "isPublic": {
                     "type": "boolean"
+                },
+                "items": {
+                    "description": "unified content (item-model)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Item"
+                    }
+                },
+                "shareToken": {
+                    "description": "non-nil when a share link has been generated",
+                    "type": "string"
                 },
                 "testQuestions": {
                     "type": "array",
@@ -1002,11 +1071,135 @@ const docTemplate = `{
                 }
             }
         },
-        "model.TestOption": {
+        "model.Exercise": {
             "type": "object",
             "properties": {
+                "CollectionID": {
+                    "type": "string"
+                },
+                "CreatedAt": {
+                    "type": "string"
+                },
+                "Distractors": {
+                    "description": "bank only: extra words for the shared pool",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "ID": {
+                    "type": "string"
+                },
+                "Kind": {
+                    "description": "\"bank\" | \"choice\" | \"quiz\"",
+                    "type": "string"
+                },
+                "Options": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.TestAnswer"
+                    }
+                },
+                "Position": {
+                    "type": "integer"
+                },
+                "Question": {
+                    "description": "quiz only: a multiple-choice question (a \"test\" is now a quiz exercise).",
+                    "type": "string"
+                },
+                "Sentences": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.ExerciseSentence"
+                    }
+                },
+                "Title": {
+                    "type": "string"
+                },
+                "UpdatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.ExerciseSentence": {
+            "type": "object",
+            "properties": {
+                "answer": {
+                    "description": "one word per blank, in order",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "distractors": {
+                    "description": "choice only: wrong options per blank",
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "position": {
+                    "type": "integer"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.Item": {
+            "type": "object",
+            "properties": {
+                "collectionID": {
+                    "description": "nil = free-floating",
+                    "type": "string"
+                },
+                "content": {
+                    "description": "type-specific fields (JSONB)",
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "parentID": {
+                    "description": "structural parent (e.g. sentence → exercise)",
+                    "type": "string"
+                },
+                "rank": {
+                    "description": "fractional index (see internal/rank)",
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.TestAnswer": {
+            "type": "object",
+            "properties": {
+                "explanation": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
                 "is_correct": {
                     "type": "boolean"
+                },
+                "position": {
+                    "type": "integer"
                 },
                 "text": {
                     "type": "string"
@@ -1025,10 +1218,13 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "image": {
+                    "type": "string"
+                },
                 "options": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.TestOption"
+                        "$ref": "#/definitions/model.TestAnswer"
                     }
                 },
                 "position": {
@@ -1042,24 +1238,36 @@ const docTemplate = `{
                 }
             }
         },
-        "service.DraftCard": {
+        "service.DraftCardInput": {
             "type": "object",
             "properties": {
-                "answer": {
+                "definition": {
                     "type": "string"
                 },
-                "question": {
+                "id": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
+                "term": {
                     "type": "string"
                 }
             }
         },
-        "service.DraftQuestion": {
+        "service.DraftTestInput": {
             "type": "object",
             "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "image": {
+                    "type": "string"
+                },
                 "options": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.TestOption"
+                        "$ref": "#/definitions/model.TestAnswer"
                     }
                 },
                 "question": {
@@ -1100,12 +1308,14 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "draftID": {
-                    "description": "non-nil for active collections that have a pending draft (not stored in DB)",
+                    "description": "non-nil for collections that have a pending item_draft overlay (not stored in DB)",
                     "type": "string"
                 },
-                "draftOf": {
-                    "description": "non-nil for draft collections",
-                    "type": "string"
+                "exercises": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Exercise"
+                    }
                 },
                 "followerCount": {
                     "type": "integer"
@@ -1113,14 +1323,22 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
-                "isDraft": {
-                    "type": "boolean"
-                },
                 "isFollowed": {
                     "type": "boolean"
                 },
                 "isPublic": {
                     "type": "boolean"
+                },
+                "items": {
+                    "description": "unified content (item-model)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Item"
+                    }
+                },
+                "shareToken": {
+                    "description": "non-nil when a share link has been generated",
+                    "type": "string"
                 },
                 "testQuestions": {
                     "type": "array",
@@ -1145,7 +1363,7 @@ const docTemplate = `{
                 "cards": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/service.DraftCard"
+                        "$ref": "#/definitions/service.DraftCardInput"
                     }
                 },
                 "description": {
@@ -1157,7 +1375,7 @@ const docTemplate = `{
                 "testQuestions": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/service.DraftQuestion"
+                        "$ref": "#/definitions/service.DraftTestInput"
                     }
                 },
                 "title": {
@@ -1181,6 +1399,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "picture": {
+                    "type": "string"
+                },
+                "role": {
                     "type": "string"
                 }
             }

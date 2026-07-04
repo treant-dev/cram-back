@@ -2,17 +2,19 @@ basePath: /
 definitions:
   model.Card:
     properties:
-      answer:
-        type: string
       collectionID:
         type: string
       createdAt:
         type: string
+      definition:
+        type: string
       id:
+        type: string
+      image:
         type: string
       position:
         type: integer
-      question:
+      term:
         type: string
       updatedAt:
         type: string
@@ -28,18 +30,25 @@ definitions:
       description:
         type: string
       draftID:
-        description: non-nil for active collections that have a pending draft (not
-          stored in DB)
+        description: non-nil for collections that have a pending item_draft overlay
+          (not stored in DB)
         type: string
-      draftOf:
-        description: non-nil for draft collections
-        type: string
+      exercises:
+        items:
+          $ref: '#/definitions/model.Exercise'
+        type: array
       id:
         type: string
-      isDraft:
-        type: boolean
       isPublic:
         type: boolean
+      items:
+        description: unified content (item-model)
+        items:
+          $ref: '#/definitions/model.Item'
+        type: array
+      shareToken:
+        description: non-nil when a share link has been generated
+        type: string
       testQuestions:
         items:
           $ref: '#/definitions/model.TestQuestion'
@@ -51,10 +60,96 @@ definitions:
       userID:
         type: string
     type: object
-  model.TestOption:
+  model.Exercise:
     properties:
+      CollectionID:
+        type: string
+      CreatedAt:
+        type: string
+      Distractors:
+        description: 'bank only: extra words for the shared pool'
+        items:
+          type: string
+        type: array
+      ID:
+        type: string
+      Kind:
+        description: '"bank" | "choice" | "quiz"'
+        type: string
+      Options:
+        items:
+          $ref: '#/definitions/model.TestAnswer'
+        type: array
+      Position:
+        type: integer
+      Question:
+        description: 'quiz only: a multiple-choice question (a "test" is now a quiz
+          exercise).'
+        type: string
+      Sentences:
+        items:
+          $ref: '#/definitions/model.ExerciseSentence'
+        type: array
+      Title:
+        type: string
+      UpdatedAt:
+        type: string
+    type: object
+  model.ExerciseSentence:
+    properties:
+      answer:
+        description: one word per blank, in order
+        items:
+          type: string
+        type: array
+      distractors:
+        description: 'choice only: wrong options per blank'
+        items:
+          items:
+            type: string
+          type: array
+        type: array
+      id:
+        type: string
+      position:
+        type: integer
+      text:
+        type: string
+    type: object
+  model.Item:
+    properties:
+      collectionID:
+        description: nil = free-floating
+        type: string
+      content:
+        additionalProperties: {}
+        description: type-specific fields (JSONB)
+        type: object
+      createdAt:
+        type: string
+      id:
+        type: string
+      parentID:
+        description: structural parent (e.g. sentence → exercise)
+        type: string
+      rank:
+        description: fractional index (see internal/rank)
+        type: string
+      type:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  model.TestAnswer:
+    properties:
+      explanation:
+        type: string
+      id:
+        type: string
       is_correct:
         type: boolean
+      position:
+        type: integer
       text:
         type: string
     type: object
@@ -66,9 +161,11 @@ definitions:
         type: string
       id:
         type: string
+      image:
+        type: string
       options:
         items:
-          $ref: '#/definitions/model.TestOption'
+          $ref: '#/definitions/model.TestAnswer'
         type: array
       position:
         type: integer
@@ -77,18 +174,26 @@ definitions:
       updatedAt:
         type: string
     type: object
-  service.DraftCard:
+  service.DraftCardInput:
     properties:
-      answer:
+      definition:
         type: string
-      question:
+      id:
+        type: string
+      image:
+        type: string
+      term:
         type: string
     type: object
-  service.DraftQuestion:
+  service.DraftTestInput:
     properties:
+      id:
+        type: string
+      image:
+        type: string
       options:
         items:
-          $ref: '#/definitions/model.TestOption'
+          $ref: '#/definitions/model.TestAnswer'
         type: array
       question:
         type: string
@@ -115,22 +220,29 @@ definitions:
       description:
         type: string
       draftID:
-        description: non-nil for active collections that have a pending draft (not
-          stored in DB)
+        description: non-nil for collections that have a pending item_draft overlay
+          (not stored in DB)
         type: string
-      draftOf:
-        description: non-nil for draft collections
-        type: string
+      exercises:
+        items:
+          $ref: '#/definitions/model.Exercise'
+        type: array
       followerCount:
         type: integer
       id:
         type: string
-      isDraft:
-        type: boolean
       isFollowed:
         type: boolean
       isPublic:
         type: boolean
+      items:
+        description: unified content (item-model)
+        items:
+          $ref: '#/definitions/model.Item'
+        type: array
+      shareToken:
+        description: non-nil when a share link has been generated
+        type: string
       testQuestions:
         items:
           $ref: '#/definitions/model.TestQuestion'
@@ -146,7 +258,7 @@ definitions:
     properties:
       cards:
         items:
-          $ref: '#/definitions/service.DraftCard'
+          $ref: '#/definitions/service.DraftCardInput'
         type: array
       description:
         type: string
@@ -154,7 +266,7 @@ definitions:
         type: boolean
       testQuestions:
         items:
-          $ref: '#/definitions/service.DraftQuestion'
+          $ref: '#/definitions/service.DraftTestInput'
         type: array
       title:
         type: string
@@ -170,6 +282,8 @@ definitions:
       name:
         type: string
       picture:
+        type: string
+      role:
         type: string
     type: object
 host: localhost:8080
@@ -434,7 +548,7 @@ paths:
         name: collectionID
         required: true
         type: string
-      - description: CSV file
+      - description: CSV / JSON / YAML file
         in: formData
         name: file
         required: true
@@ -448,6 +562,8 @@ paths:
             properties:
               imported:
                 type: integer
+              skipped:
+                type: integer
             type: object
         "400":
           description: Bad Request
@@ -455,7 +571,7 @@ paths:
             type: string
       security:
       - BearerAuth: []
-      summary: Bulk import cards from CSV (question,answer)
+      summary: Bulk import cards from CSV (question;answer) or a JSON/YAML list
       tags:
       - cards
   /collections/{collectionID}/draft:
@@ -552,6 +668,35 @@ paths:
       summary: Publish the draft as the active version
       tags:
       - drafts
+  /collections/{collectionID}/exercises/import:
+    post:
+      consumes:
+      - text/plain
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            properties:
+              imported:
+                type: integer
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Bulk import exercises from a YAML document
+      tags:
+      - exercises
   /collections/{collectionID}/follow:
     delete:
       parameters:
@@ -605,7 +750,7 @@ paths:
           properties:
             options:
               items:
-                $ref: '#/definitions/model.TestOption'
+                $ref: '#/definitions/model.TestAnswer'
               type: array
             position:
               type: integer
@@ -675,7 +820,7 @@ paths:
           properties:
             options:
               items:
-                $ref: '#/definitions/model.TestOption'
+                $ref: '#/definitions/model.TestAnswer'
               type: array
             position:
               type: integer
@@ -698,6 +843,10 @@ paths:
       summary: Update a test question
       tags:
       - tests
+  /collections/{collectionID}/tests/import:
+    post:
+      responses: {}
+      summary: Bulk import test questions from CSV or a JSON/YAML list
   /home:
     get:
       produces:

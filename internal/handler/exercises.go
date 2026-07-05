@@ -162,10 +162,12 @@ func (h *CardsHandler) ImportExercises(w http.ResponseWriter, r *http.Request) {
 // element carries its `type` (card | quiz | exercise). Fields are the union of all
 // three shapes; only those relevant to `type` are read.
 type importItem struct {
-	Type     string `yaml:"type"`
-	Question string `yaml:"question"` // card front / quiz question
-	Answer   string `yaml:"answer"`   // card back
-	Options  []struct {
+	Type       string `yaml:"type"`
+	Term       string `yaml:"term"`       // card front (canonical; matches the model/UI)
+	Definition string `yaml:"definition"` // card back  (canonical)
+	Question   string `yaml:"question"`   // quiz question; also accepted as a card-front alias
+	Answer     string `yaml:"answer"`     // card back alias (back-compat)
+	Options    []struct {
 		Text    string `yaml:"text"`
 		Correct bool   `yaml:"correct"`
 	} `yaml:"options"` // quiz
@@ -202,12 +204,20 @@ func (h *CardsHandler) ImportItems(w http.ResponseWriter, r *http.Request) {
 	for _, it := range parsed {
 		switch strings.TrimSpace(it.Type) {
 		case "card":
-			q, a := strings.TrimSpace(it.Question), strings.TrimSpace(it.Answer)
-			if q == "" || a == "" {
+			// Prefer term/definition (canonical); fall back to question/answer aliases.
+			term := strings.TrimSpace(it.Term)
+			if term == "" {
+				term = strings.TrimSpace(it.Question)
+			}
+			def := strings.TrimSpace(it.Definition)
+			if def == "" {
+				def = strings.TrimSpace(it.Answer)
+			}
+			if term == "" || def == "" {
 				skipped++
 				continue
 			}
-			items = append(items, service.ImportItem{Type: "card", Card: &model.Card{Term: q, Definition: a}})
+			items = append(items, service.ImportItem{Type: "card", Card: &model.Card{Term: term, Definition: def}})
 		case "quiz":
 			var opts []model.TestAnswer
 			for _, o := range it.Options {

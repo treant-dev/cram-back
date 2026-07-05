@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -118,6 +119,10 @@ func (r *ItemDraftRepository) Publish(ctx context.Context, collectionID string) 
 	if err != nil {
 		return err
 	}
+	// Apply parent upserts before child upserts (a sentence's parent_id → items.id
+	// must exist first), then deletes. Without this, publishing a new exercise plus
+	// its sentences can violate the parent_id FK.
+	sort.SliceStable(drafts, func(i, j int) bool { return publishOrder(drafts[i]) < publishOrder(drafts[j]) })
 	for _, d := range drafts {
 		switch d.Op {
 		case "delete":
@@ -147,6 +152,18 @@ func (r *ItemDraftRepository) Publish(ctx context.Context, collectionID string) 
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// publishOrder ranks draft rows for safe application: parentless upserts (0) before
+// child upserts (1) before deletes (2).
+func publishOrder(d model.ItemDraft) int {
+	if d.Op == "delete" {
+		return 2
+	}
+	if d.ParentID != nil {
+		return 1
+	}
+	return 0
 }
 
 func (r *ItemDraftRepository) listTx(ctx context.Context, tx pgx.Tx, collectionID string) ([]model.ItemDraft, error) {

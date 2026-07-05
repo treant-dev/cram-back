@@ -575,6 +575,85 @@ func sameItem(a, b model.Item) bool {
 	return reflect.DeepEqual(a.Content, b.Content)
 }
 
+// stageNewDraftItem appends one brand-new item to the draft at the given rank.
+func (s *CollectionService) stageNewDraftItem(ctx context.Context, collectionID, typ string, parentID *string, content map[string]any, rk string) error {
+	t := typ
+	r := rk
+	return s.itemDrafts.Set(ctx, model.ItemDraft{
+		ItemID: uuid.NewString(), CollectionID: collectionID, Op: "upsert",
+		Type: &t, ParentID: parentID, Content: content, Rank: &r,
+	})
+}
+
+// StageImportCards stages a bulk card import into the draft (edit-mode import).
+func (s *CollectionService) StageImportCards(ctx context.Context, collectionID, userID string, cards []model.Card) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	prev, err := s.items.LastRank(ctx, collectionID, nil)
+	if err != nil {
+		return err
+	}
+	for _, c := range cards {
+		prev = rank.After(prev)
+		if err := s.stageNewDraftItem(ctx, collectionID, "card", nil, cardContent(c.Term, c.Definition, c.Image), prev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// StageImportTests stages a bulk quiz import into the draft.
+func (s *CollectionService) StageImportTests(ctx context.Context, collectionID, userID string, tqs []model.TestQuestion) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	prev, err := s.items.LastRank(ctx, collectionID, nil)
+	if err != nil {
+		return err
+	}
+	for _, tq := range tqs {
+		prev = rank.After(prev)
+		if err := s.stageNewDraftItem(ctx, collectionID, "exercise", nil, quizContent(tq.Question, tq.Options), prev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// StageImportExercises stages a bulk exercise import into the draft, including each
+// exercise's sentence children (parent_id → the staged exercise's id).
+func (s *CollectionService) StageImportExercises(ctx context.Context, collectionID, userID string, exercises []model.Exercise) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	prev, err := s.items.LastRank(ctx, collectionID, nil)
+	if err != nil {
+		return err
+	}
+	for _, ex := range exercises {
+		prev = rank.After(prev)
+		exID := uuid.NewString()
+		etyp := "exercise"
+		exRank := prev
+		if err := s.itemDrafts.Set(ctx, model.ItemDraft{
+			ItemID: exID, CollectionID: collectionID, Op: "upsert",
+			Type: &etyp, Content: exerciseContent(ex.Kind, ex.Title, ex.Distractors), Rank: &exRank,
+		}); err != nil {
+			return err
+		}
+		sprev := ""
+		for _, sent := range ex.Sentences {
+			sprev = rank.After(sprev)
+			pid := exID
+			if err := s.stageNewDraftItem(ctx, collectionID, "sentence", &pid, sentenceContent(sent), sprev); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // Follows
 
 func (s *CollectionService) Follow(ctx context.Context, userID, collectionID string) error {

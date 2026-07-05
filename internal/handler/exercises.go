@@ -144,8 +144,15 @@ func (h *CardsHandler) ImportExercises(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.ImportExercises(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, exercises); err != nil {
-		handleErr(w, err)
+	cid, uid := chi.URLParam(r, "collectionID"), h.claims(r).UserID
+	var impErr error
+	if wantsDraft(r) {
+		impErr = h.svc.StageImportExercises(r.Context(), cid, uid, exercises)
+	} else {
+		impErr = h.svc.ImportExercises(r.Context(), cid, uid, exercises)
+	}
+	if impErr != nil {
+		handleErr(w, impErr)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]int{"imported": len(exercises), "skipped": skipped})

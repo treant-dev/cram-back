@@ -44,6 +44,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// wantsDraft reports whether an import should stage into the draft (?draft=true)
+// rather than write directly to live items.
+func wantsDraft(r *http.Request) bool {
+	return r.URL.Query().Get("draft") == "true"
+}
+
 func handleErr(w http.ResponseWriter, err error) {
 	if errors.Is(err, service.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -709,8 +715,15 @@ func (h *CardsHandler) ImportCSV(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.ImportCards(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, cards); err != nil {
-		handleErr(w, err)
+	cid, uid := chi.URLParam(r, "collectionID"), h.claims(r).UserID
+	var impErr error
+	if wantsDraft(r) {
+		impErr = h.svc.StageImportCards(r.Context(), cid, uid, cards)
+	} else {
+		impErr = h.svc.ImportCards(r.Context(), cid, uid, cards)
+	}
+	if impErr != nil {
+		handleErr(w, impErr)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]int{"imported": len(cards), "skipped": skipped})
@@ -737,8 +750,15 @@ func (h *CardsHandler) ImportTests(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("too many rows (max %d)", maxCSVRows), http.StatusBadRequest)
 		return
 	}
-	if err := h.svc.ImportTests(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, tqs); err != nil {
-		handleErr(w, err)
+	cid, uid := chi.URLParam(r, "collectionID"), h.claims(r).UserID
+	var impErr error
+	if wantsDraft(r) {
+		impErr = h.svc.StageImportTests(r.Context(), cid, uid, tqs)
+	} else {
+		impErr = h.svc.ImportTests(r.Context(), cid, uid, tqs)
+	}
+	if impErr != nil {
+		handleErr(w, impErr)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]int{"imported": len(tqs), "skipped": skipped})

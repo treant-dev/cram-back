@@ -144,11 +144,140 @@ func (h *CardsHandler) ImportExercises(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.ImportExercises(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, exercises); err != nil {
-		handleErr(w, err)
+	cid, uid := chi.URLParam(r, "collectionID"), h.claims(r).UserID
+	var impErr error
+	if wantsDraft(r) {
+		impErr = h.svc.StageImportExercises(r.Context(), cid, uid, exercises)
+	} else {
+		impErr = h.svc.ImportExercises(r.Context(), cid, uid, exercises)
+	}
+	if impErr != nil {
+		handleErr(w, impErr)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]int{"imported": len(exercises), "skipped": skipped})
+}
+
+// importItem is one entry of the unified import: a flat JSON/YAML list where each
+// element carries its `type` (card | quiz | exercise). Fields are the union of all
+// three shapes; only those relevant to `type` are read.
+type importItem struct {
+	Type       string `yaml:"type"`
+	Term       string `yaml:"term"`       // card front (canonical; matches the model/UI)
+	Definition string `yaml:"definition"` // card back  (canonical)
+	Question   string `yaml:"question"`   // quiz question; also accepted as a card-front alias
+	Answer     string `yaml:"answer"`     // card back alias (back-compat)
+	Options    []struct {
+		Text    string `yaml:"text"`
+		Correct bool   `yaml:"correct"`
+	} `yaml:"options"` // quiz
+	Kind        string         `yaml:"kind"` // exercise: bank | choice
+	Title       string         `yaml:"title"`
+	Sentences   []yamlSentence `yaml:"sentences"`
+	Distractors []string       `yaml:"distractors"` // bank
+}
+
+// ImportItems godoc
+// @Summary      Bulk import a mixed list of items (card/quiz/exercise) from JSON/YAML
+// @Tags         collections
+// @Security     BearerAuth
+// @Param        collectionID path string true "Collection ID"
+// @Param        draft query bool false "Stage into the draft instead of writing live"
+// @Success      201 {object} map[string]int
+// @Failure      400 {string} string
+// @Router       /collections/{collectionID}/import [post]
+func (h *CardsHandler) ImportItems(w http.ResponseWriter, r *http.Request) {
+	const maxBodySize = 4 << 20 // 4 MB
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodySize))
+	if err != nil {
+		http.Error(w, "body too large", http.StatusBadRequest)
+		return
+	}
+	var parsed []importItem
+	if !looksStructured(raw) || yaml.Unmarshal(raw, &parsed) != nil {
+		http.Error(w, `import must be a JSON list of items, each with a "type" (card|quiz|exercise)`, http.StatusBadRequest)
+		return
+	}
+
+	var items []service.ImportItem
+	skipped, sentenceCount := 0, 0
+	for _, it := range parsed {
+		switch strings.TrimSpace(it.Type) {
+		case "card":
+			// Prefer term/definition (canonical); fall back to question/answer aliases.
+			term := strings.TrimSpace(it.Term)
+			if term == "" {
+				term = strings.TrimSpace(it.Question)
+			}
+			def := strings.TrimSpace(it.Definition)
+			if def == "" {
+				def = strings.TrimSpace(it.Answer)
+			}
+			if term == "" || def == "" {
+				skipped++
+				continue
+			}
+			items = append(items, service.ImportItem{Type: "card", Card: &model.Card{Term: term, Definition: def}})
+		case "quiz":
+			var opts []model.TestAnswer
+			for _, o := range it.Options {
+				if t := strings.TrimSpace(o.Text); t != "" {
+					opts = append(opts, model.TestAnswer{Text: t, IsCorrect: o.Correct})
+				}
+			}
+			if strings.TrimSpace(it.Question) == "" || len(opts) < 2 || !hasCorrectOption(opts) {
+				skipped++
+				continue
+			}
+			items = append(items, service.ImportItem{Type: "quiz", Quiz: &model.TestQuestion{Question: strings.TrimSpace(it.Question), Options: opts}})
+		case "exercise":
+			kind := strings.TrimSpace(it.Kind)
+			if kind != "bank" && kind != "choice" {
+				skipped++
+				continue
+			}
+			ex := model.Exercise{Kind: kind, Title: strings.TrimSpace(it.Title)}
+			if kind == "bank" {
+				for _, d := range it.Distractors {
+					if d = strings.TrimSpace(d); d != "" {
+						ex.Distractors = append(ex.Distractors, d)
+					}
+				}
+			}
+			for _, ys := range it.Sentences {
+				s, ok := buildSentence(kind, ys)
+				if !ok {
+					skipped++
+					continue
+				}
+				ex.Sentences = append(ex.Sentences, s)
+				sentenceCount++
+			}
+			if len(ex.Sentences) == 0 {
+				skipped++
+				continue
+			}
+			items = append(items, service.ImportItem{Type: "exercise", Exercise: &ex})
+		default:
+			skipped++
+		}
+	}
+
+	if len(items) == 0 {
+		http.Error(w, "no valid items in import", http.StatusBadRequest)
+		return
+	}
+	if sentenceCount > maxCSVRows {
+		http.Error(w, "too many sentences", http.StatusBadRequest)
+		return
+	}
+
+	imported, err := h.svc.ImportItems(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, items, wantsDraft(r))
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]int{"imported": imported, "skipped": skipped})
 }
 
 // buildSentence validates one sentence against its exercise kind and returns the model

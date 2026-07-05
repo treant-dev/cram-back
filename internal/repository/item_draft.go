@@ -3,7 +3,9 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -69,9 +71,31 @@ func (r *ItemDraftRepository) ListByCollection(ctx context.Context, collectionID
 	return out, rows.Err()
 }
 
-// Remove drops a single draft row (per-element revert).
-func (r *ItemDraftRepository) Remove(ctx context.Context, itemID string) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM item_draft WHERE item_id = $1`, itemID)
+// Get returns a single staged row, or nil if the item has no pending change.
+func (r *ItemDraftRepository) Get(ctx context.Context, itemID string) (*model.ItemDraft, error) {
+	var d model.ItemDraft
+	var raw []byte
+	err := r.pool.QueryRow(ctx,
+		`SELECT item_id, collection_id, op, type, parent_id, content, rank, updated_at
+		 FROM item_draft WHERE item_id = $1`, itemID,
+	).Scan(&d.ItemID, &d.CollectionID, &d.Op, &d.Type, &d.ParentID, &raw, &d.Rank, &d.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get draft: %w", err)
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &d.Content); err != nil {
+			return nil, fmt.Errorf("unmarshal draft content: %w", err)
+		}
+	}
+	return &d, nil
+}
+
+// Remove drops a single draft row (per-element revert), scoped to the collection.
+func (r *ItemDraftRepository) Remove(ctx context.Context, collectionID, itemID string) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM item_draft WHERE item_id = $1 AND collection_id = $2`, itemID, collectionID)
 	return err
 }
 
@@ -95,6 +119,10 @@ func (r *ItemDraftRepository) Publish(ctx context.Context, collectionID string) 
 	if err != nil {
 		return err
 	}
+	// Apply parent upserts before child upserts (a sentence's parent_id → items.id
+	// must exist first), then deletes. Without this, publishing a new exercise plus
+	// its sentences can violate the parent_id FK.
+	sort.SliceStable(drafts, func(i, j int) bool { return publishOrder(drafts[i]) < publishOrder(drafts[j]) })
 	for _, d := range drafts {
 		switch d.Op {
 		case "delete":
@@ -124,6 +152,18 @@ func (r *ItemDraftRepository) Publish(ctx context.Context, collectionID string) 
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// publishOrder ranks draft rows for safe application: parentless upserts (0) before
+// child upserts (1) before deletes (2).
+func publishOrder(d model.ItemDraft) int {
+	if d.Op == "delete" {
+		return 2
+	}
+	if d.ParentID != nil {
+		return 1
+	}
+	return 0
 }
 
 func (r *ItemDraftRepository) listTx(ctx context.Context, tx pgx.Tx, collectionID string) ([]model.ItemDraft, error) {

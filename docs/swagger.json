@@ -576,6 +576,205 @@
                 }
             }
         },
+        "/collections/{collectionID}/draft/diff": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "drafts"
+                ],
+                "summary": "Diff the staged draft against the published collection",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Collection ID",
+                        "name": "collectionID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/service.DraftDiff"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/collections/{collectionID}/draft/items": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "drafts"
+                ],
+                "summary": "Stage a new item into the draft",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Collection ID",
+                        "name": "collectionID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Item to stage",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.draftItemBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.Item"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/collections/{collectionID}/draft/items/{itemID}": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "drafts"
+                ],
+                "summary": "Stage an edit to a single item in the draft",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Collection ID",
+                        "name": "collectionID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Item ID",
+                        "name": "itemID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New item state",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.draftItemBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.Item"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "drafts"
+                ],
+                "summary": "Stage deletion of a single item in the draft",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Collection ID",
+                        "name": "collectionID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Item ID",
+                        "name": "itemID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
+        "/collections/{collectionID}/draft/items/{itemID}/revert": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "drafts"
+                ],
+                "summary": "Revert one item's staged change back to the published state",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Collection ID",
+                        "name": "collectionID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Item ID",
+                        "name": "itemID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
         "/collections/{collectionID}/draft/publish": {
             "post": {
                 "security": [
@@ -977,6 +1176,24 @@
         }
     },
     "definitions": {
+        "handler.draftItemBody": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "parent_id": {
+                    "type": "string"
+                },
+                "rank": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
         "model.Card": {
             "type": "object",
             "properties": {
@@ -1245,6 +1462,48 @@
                     "type": "string"
                 },
                 "term": {
+                    "type": "string"
+                }
+            }
+        },
+        "service.DraftDiff": {
+            "type": "object",
+            "properties": {
+                "Entries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/service.DraftDiffEntry"
+                    }
+                }
+            }
+        },
+        "service.DraftDiffEntry": {
+            "type": "object",
+            "properties": {
+                "After": {
+                    "description": "staged result; nil when deleted",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Item"
+                        }
+                    ]
+                },
+                "Before": {
+                    "description": "published item; nil when added",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Item"
+                        }
+                    ]
+                },
+                "ItemID": {
+                    "type": "string"
+                },
+                "Status": {
+                    "description": "\"added\" | \"changed\" | \"deleted\"",
+                    "type": "string"
+                },
+                "Type": {
                     "type": "string"
                 }
             }

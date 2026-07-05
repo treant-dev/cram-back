@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"sort"
 	"time"
 
@@ -136,7 +137,9 @@ type itemEventRepo interface {
 
 type itemDraftRepo interface {
 	Set(ctx context.Context, d model.ItemDraft) error
+	Get(ctx context.Context, itemID string) (*model.ItemDraft, error)
 	ListByCollection(ctx context.Context, collectionID string) ([]model.ItemDraft, error)
+	Remove(ctx context.Context, collectionID, itemID string) error
 	Clear(ctx context.Context, collectionID string) error
 	Publish(ctx context.Context, collectionID string) error
 }
@@ -428,6 +431,148 @@ func (s *CollectionService) PublishDraft(ctx context.Context, collectionID, user
 		return err
 	}
 	return s.itemDrafts.Publish(ctx, collectionID)
+}
+
+// --- Granular draft operations ---
+// One item at a time (add / edit / delete / revert), the surface MCP tools reuse.
+// All writes land in item_draft (invisible to readers) until PublishDraft.
+
+// DraftItemInput carries one staged item's desired state.
+type DraftItemInput struct {
+	Type     string         // card | exercise | sentence
+	ParentID *string        // for sentence → exercise
+	Content  map[string]any // type-specific body
+	Rank     string         // optional; empty keeps the item's current rank, else appends
+}
+
+var validItemTypes = map[string]bool{"card": true, "exercise": true, "sentence": true}
+
+// StageDraftItem stages an upsert of a single item. An empty itemID means a new
+// item (id generated, appended at the end). For an existing item the current rank
+// is preserved unless an explicit rank is given.
+func (s *CollectionService) StageDraftItem(ctx context.Context, collectionID, userID, itemID string, in DraftItemInput) (*model.Item, error) {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return nil, err
+	}
+	if !validItemTypes[in.Type] {
+		return nil, ErrInvalidType
+	}
+	rk := in.Rank
+	if rk == "" && itemID != "" {
+		if live, err := s.items.Get(ctx, itemID, collectionID); err == nil && live != nil {
+			rk = live.Rank
+		} else if d, err := s.itemDrafts.Get(ctx, itemID); err == nil && d != nil && d.Rank != nil {
+			rk = *d.Rank
+		}
+	}
+	if rk == "" {
+		last, err := s.items.LastRank(ctx, collectionID, in.ParentID)
+		if err != nil {
+			return nil, err
+		}
+		rk = rank.After(last)
+	}
+	if itemID == "" {
+		itemID = uuid.NewString()
+	}
+	typ := in.Type
+	if err := s.itemDrafts.Set(ctx, model.ItemDraft{
+		ItemID: itemID, CollectionID: collectionID, Op: "upsert",
+		Type: &typ, ParentID: in.ParentID, Content: in.Content, Rank: &rk,
+	}); err != nil {
+		return nil, err
+	}
+	cid := collectionID
+	return &model.Item{ID: itemID, Type: typ, CollectionID: &cid, ParentID: in.ParentID, Content: in.Content, Rank: rk}, nil
+}
+
+// StageDraftDelete stages a deletion. A live item gets a delete marker; a
+// draft-only addition is simply dropped from the draft.
+func (s *CollectionService) StageDraftDelete(ctx context.Context, collectionID, userID, itemID string) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	live, err := s.items.Get(ctx, itemID, collectionID)
+	if err != nil {
+		return err
+	}
+	if live == nil {
+		return s.itemDrafts.Remove(ctx, collectionID, itemID)
+	}
+	return s.itemDrafts.Set(ctx, model.ItemDraft{ItemID: itemID, CollectionID: collectionID, Op: "delete"})
+}
+
+// RevertDraftItem drops the staged change for one item → back to published state.
+func (s *CollectionService) RevertDraftItem(ctx context.Context, collectionID, userID, itemID string) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	return s.itemDrafts.Remove(ctx, collectionID, itemID)
+}
+
+// DraftDiffEntry is one item whose staged state differs from what's published.
+type DraftDiffEntry struct {
+	ItemID string      `json:"ItemID"`
+	Type   string      `json:"Type"`
+	Status string      `json:"Status"` // "added" | "changed" | "deleted"
+	Before *model.Item `json:"Before"` // published item; nil when added
+	After  *model.Item `json:"After"`  // staged result; nil when deleted
+}
+
+// DraftDiff is the review payload: only changed items (added/changed/deleted).
+type DraftDiff struct {
+	Entries []DraftDiffEntry `json:"Entries"`
+}
+
+// GetDraftDiff compares the staged draft against live items and returns per-item
+// statuses with before/after — the colored review view.
+func (s *CollectionService) GetDraftDiff(ctx context.Context, collectionID, userID string) (*DraftDiff, error) {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return nil, err
+	}
+	live, err := s.items.ListByCollection(ctx, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	drafts, err := s.itemDrafts.ListByCollection(ctx, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	liveByID := make(map[string]model.Item, len(live))
+	for _, it := range live {
+		liveByID[it.ID] = it
+	}
+	out := &DraftDiff{Entries: []DraftDiffEntry{}}
+	for _, d := range drafts {
+		cur, hasLive := liveByID[d.ItemID]
+		switch d.Op {
+		case "delete":
+			if hasLive {
+				b := cur
+				out.Entries = append(out.Entries, DraftDiffEntry{ItemID: d.ItemID, Type: cur.Type, Status: "deleted", Before: &b})
+			}
+		case "upsert":
+			cid := d.CollectionID
+			after := model.Item{ID: d.ItemID, Type: derefStr(d.Type), CollectionID: &cid, ParentID: d.ParentID, Content: d.Content, Rank: derefStr(d.Rank)}
+			a := after
+			if !hasLive {
+				out.Entries = append(out.Entries, DraftDiffEntry{ItemID: d.ItemID, Type: after.Type, Status: "added", After: &a})
+			} else if !sameItem(cur, after) {
+				b := cur
+				out.Entries = append(out.Entries, DraftDiffEntry{ItemID: d.ItemID, Type: after.Type, Status: "changed", Before: &b, After: &a})
+			}
+		}
+	}
+	return out, nil
+}
+
+// sameItem compares the display-relevant fields (type, parent, content), ignoring
+// rank — a pure reorder isn't a content change.
+func sameItem(a, b model.Item) bool {
+	if a.Type != b.Type || derefStr(a.ParentID) != derefStr(b.ParentID) {
+		return false
+	}
+	return reflect.DeepEqual(a.Content, b.Content)
 }
 
 // Follows

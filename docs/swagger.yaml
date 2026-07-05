@@ -1,5 +1,17 @@
 basePath: /
 definitions:
+  handler.draftItemBody:
+    properties:
+      content:
+        additionalProperties: {}
+        type: object
+      parent_id:
+        type: string
+      rank:
+        type: string
+      type:
+        type: string
+    type: object
   model.Card:
     properties:
       collectionID:
@@ -183,6 +195,31 @@ definitions:
       image:
         type: string
       term:
+        type: string
+    type: object
+  service.DraftDiff:
+    properties:
+      Entries:
+        items:
+          $ref: '#/definitions/service.DraftDiffEntry'
+        type: array
+    type: object
+  service.DraftDiffEntry:
+    properties:
+      After:
+        allOf:
+        - $ref: '#/definitions/model.Item'
+        description: staged result; nil when deleted
+      Before:
+        allOf:
+        - $ref: '#/definitions/model.Item'
+        description: published item; nil when added
+      ItemID:
+        type: string
+      Status:
+        description: '"added" | "changed" | "deleted"'
+        type: string
+      Type:
         type: string
     type: object
   service.DraftTestInput:
@@ -646,6 +683,130 @@ paths:
       security:
       - BearerAuth: []
       summary: Save draft content without publishing
+      tags:
+      - drafts
+  /collections/{collectionID}/draft/diff:
+    get:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.DraftDiff'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Diff the staged draft against the published collection
+      tags:
+      - drafts
+  /collections/{collectionID}/draft/items:
+    post:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Item to stage
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handler.draftItemBody'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Item'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Stage a new item into the draft
+      tags:
+      - drafts
+  /collections/{collectionID}/draft/items/{itemID}:
+    delete:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Item ID
+        in: path
+        name: itemID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+      security:
+      - BearerAuth: []
+      summary: Stage deletion of a single item in the draft
+      tags:
+      - drafts
+    put:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Item ID
+        in: path
+        name: itemID
+        required: true
+        type: string
+      - description: New item state
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handler.draftItemBody'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Item'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Stage an edit to a single item in the draft
+      tags:
+      - drafts
+  /collections/{collectionID}/draft/items/{itemID}/revert:
+    post:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Item ID
+        in: path
+        name: itemID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+      security:
+      - BearerAuth: []
+      summary: Revert one item's staged change back to the published state
       tags:
       - drafts
   /collections/{collectionID}/draft/publish:

@@ -254,6 +254,111 @@ func (h *CardsHandler) PublishDraft(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// GetDraftDiff godoc
+// @Summary      Diff the staged draft against the published collection
+// @Tags         drafts
+// @Security     BearerAuth
+// @Param        collectionID path string true "Collection ID"
+// @Success      200 {object} service.DraftDiff
+// @Failure      404 {string} string
+// @Router       /collections/{collectionID}/draft/diff [get]
+func (h *CardsHandler) GetDraftDiff(w http.ResponseWriter, r *http.Request) {
+	diff, err := h.svc.GetDraftDiff(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID)
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, diff)
+}
+
+type draftItemBody struct {
+	Type     string         `json:"type"`
+	ParentID *string        `json:"parent_id"`
+	Content  map[string]any `json:"content"`
+	Rank     string         `json:"rank"`
+}
+
+// AddDraftItem godoc
+// @Summary      Stage a new item into the draft
+// @Tags         drafts
+// @Security     BearerAuth
+// @Param        collectionID path string true "Collection ID"
+// @Param        body body draftItemBody true "Item to stage"
+// @Success      200 {object} model.Item
+// @Failure      400 {string} string
+// @Router       /collections/{collectionID}/draft/items [post]
+func (h *CardsHandler) AddDraftItem(w http.ResponseWriter, r *http.Request) {
+	var body draftItemBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Type == "" {
+		http.Error(w, "invalid item body", http.StatusBadRequest)
+		return
+	}
+	it, err := h.svc.StageDraftItem(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, "",
+		service.DraftItemInput{Type: body.Type, ParentID: body.ParentID, Content: body.Content, Rank: body.Rank})
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// UpdateDraftItem godoc
+// @Summary      Stage an edit to a single item in the draft
+// @Tags         drafts
+// @Security     BearerAuth
+// @Param        collectionID path string true "Collection ID"
+// @Param        itemID path string true "Item ID"
+// @Param        body body draftItemBody true "New item state"
+// @Success      200 {object} model.Item
+// @Failure      400 {string} string
+// @Router       /collections/{collectionID}/draft/items/{itemID} [put]
+func (h *CardsHandler) UpdateDraftItem(w http.ResponseWriter, r *http.Request) {
+	var body draftItemBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Type == "" {
+		http.Error(w, "invalid item body", http.StatusBadRequest)
+		return
+	}
+	it, err := h.svc.StageDraftItem(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, chi.URLParam(r, "itemID"),
+		service.DraftItemInput{Type: body.Type, ParentID: body.ParentID, Content: body.Content, Rank: body.Rank})
+	if err != nil {
+		handleErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, it)
+}
+
+// DeleteDraftItem godoc
+// @Summary      Stage deletion of a single item in the draft
+// @Tags         drafts
+// @Security     BearerAuth
+// @Param        collectionID path string true "Collection ID"
+// @Param        itemID path string true "Item ID"
+// @Success      204
+// @Router       /collections/{collectionID}/draft/items/{itemID} [delete]
+func (h *CardsHandler) DeleteDraftItem(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.StageDraftDelete(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, chi.URLParam(r, "itemID")); err != nil {
+		handleErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// RevertDraftItem godoc
+// @Summary      Revert one item's staged change back to the published state
+// @Tags         drafts
+// @Security     BearerAuth
+// @Param        collectionID path string true "Collection ID"
+// @Param        itemID path string true "Item ID"
+// @Success      204
+// @Router       /collections/{collectionID}/draft/items/{itemID}/revert [post]
+func (h *CardsHandler) RevertDraftItem(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.RevertDraftItem(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, chi.URLParam(r, "itemID")); err != nil {
+		handleErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Follow godoc
 // @Summary      Follow a collection
 // @Tags         follows

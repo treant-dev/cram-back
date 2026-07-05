@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -69,9 +70,31 @@ func (r *ItemDraftRepository) ListByCollection(ctx context.Context, collectionID
 	return out, rows.Err()
 }
 
-// Remove drops a single draft row (per-element revert).
-func (r *ItemDraftRepository) Remove(ctx context.Context, itemID string) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM item_draft WHERE item_id = $1`, itemID)
+// Get returns a single staged row, or nil if the item has no pending change.
+func (r *ItemDraftRepository) Get(ctx context.Context, itemID string) (*model.ItemDraft, error) {
+	var d model.ItemDraft
+	var raw []byte
+	err := r.pool.QueryRow(ctx,
+		`SELECT item_id, collection_id, op, type, parent_id, content, rank, updated_at
+		 FROM item_draft WHERE item_id = $1`, itemID,
+	).Scan(&d.ItemID, &d.CollectionID, &d.Op, &d.Type, &d.ParentID, &raw, &d.Rank, &d.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get draft: %w", err)
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &d.Content); err != nil {
+			return nil, fmt.Errorf("unmarshal draft content: %w", err)
+		}
+	}
+	return &d, nil
+}
+
+// Remove drops a single draft row (per-element revert), scoped to the collection.
+func (r *ItemDraftRepository) Remove(ctx context.Context, collectionID, itemID string) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM item_draft WHERE item_id = $1 AND collection_id = $2`, itemID, collectionID)
 	return err
 }
 

@@ -349,6 +349,31 @@ func (h *CardsHandler) DeleteDraftItem(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// MoveDraftItem godoc
+// @Summary      Reorder one item in the draft (place between two neighbors)
+// @Tags         drafts
+// @Security     BearerAuth
+// @Param        collectionID path string true "Collection ID"
+// @Param        itemID path string true "Item ID"
+// @Param        body body object true "{after_id, before_id}"
+// @Success      204
+// @Router       /collections/{collectionID}/draft/items/{itemID}/move [post]
+func (h *CardsHandler) MoveDraftItem(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AfterID  string `json:"after_id"`
+		BeforeID string `json:"before_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if err := h.svc.MoveDraftItem(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, chi.URLParam(r, "itemID"), body.AfterID, body.BeforeID); err != nil {
+		handleErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // RevertDraftItem godoc
 // @Summary      Revert one item's staged change back to the published state
 // @Tags         drafts

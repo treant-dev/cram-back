@@ -510,6 +510,45 @@ func (s *CollectionService) RevertDraftItem(ctx context.Context, collectionID, u
 	return s.itemDrafts.Remove(ctx, collectionID, itemID)
 }
 
+// MoveDraftItem reorders one item by staging an upsert with a new rank between the
+// afterID and beforeID neighbors (either empty for a list end). Preserves the item's
+// current content/type/parent (from the draft overlay).
+func (s *CollectionService) MoveDraftItem(ctx context.Context, collectionID, userID, itemID, afterID, beforeID string) error {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return err
+	}
+	// Current state: a staged upsert wins, else the live item.
+	var typ string
+	var parent *string
+	var content map[string]any
+	if d, err := s.itemDrafts.Get(ctx, itemID); err == nil && d != nil && d.Op == "upsert" {
+		typ, parent, content = derefStr(d.Type), d.ParentID, d.Content
+	} else if it, err := s.items.Get(ctx, itemID, collectionID); err != nil {
+		return err
+	} else if it != nil {
+		typ, parent, content = it.Type, it.ParentID, it.Content
+	} else {
+		return ErrNotFound
+	}
+	rankOf := func(id string) string {
+		if id == "" {
+			return ""
+		}
+		if d, err := s.itemDrafts.Get(ctx, id); err == nil && d != nil && d.Rank != nil {
+			return *d.Rank
+		}
+		if it, err := s.items.Get(ctx, id, collectionID); err == nil && it != nil {
+			return it.Rank
+		}
+		return ""
+	}
+	nr := rank.Between(rankOf(afterID), rankOf(beforeID))
+	return s.itemDrafts.Set(ctx, model.ItemDraft{
+		ItemID: itemID, CollectionID: collectionID, Op: "upsert",
+		Type: &typ, ParentID: parent, Content: content, Rank: &nr,
+	})
+}
+
 // DraftDiffEntry is one item whose staged state differs from what's published.
 type DraftDiffEntry struct {
 	ItemID string      `json:"ItemID"`
@@ -619,6 +658,79 @@ func (s *CollectionService) StageImportTests(ctx context.Context, collectionID, 
 		}
 	}
 	return nil
+}
+
+// ImportItem is one entry of a unified (mixed-type) import. Exactly one of the
+// pointers is set, matching Type ("card" | "quiz" | "exercise").
+type ImportItem struct {
+	Type     string
+	Card     *model.Card
+	Quiz     *model.TestQuestion
+	Exercise *model.Exercise
+}
+
+// ImportItems bulk-imports a mixed list of items in order. draft=true stages into
+// item_draft (edit mode); otherwise writes straight to live items.
+func (s *CollectionService) ImportItems(ctx context.Context, collectionID, userID string, items []ImportItem, draft bool) (int, error) {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return 0, err
+	}
+	prev, err := s.items.LastRank(ctx, collectionID, nil)
+	if err != nil {
+		return 0, err
+	}
+	// add one top-level item (card/quiz/exercise parent); returns its id.
+	add := func(typ string, content map[string]any, rk string) (string, error) {
+		if draft {
+			id := uuid.NewString()
+			t, r := typ, rk
+			return id, s.itemDrafts.Set(ctx, model.ItemDraft{ItemID: id, CollectionID: collectionID, Op: "upsert", Type: &t, Content: content, Rank: &r})
+		}
+		it, err := s.items.Create(ctx, model.Item{Type: typ, CollectionID: &collectionID, Content: content, Rank: rk})
+		if err != nil {
+			return "", err
+		}
+		return it.ID, nil
+	}
+	addSentence := func(parentID string, content map[string]any, rk string) error {
+		if draft {
+			pid := parentID
+			return s.stageNewDraftItem(ctx, collectionID, "sentence", &pid, content, rk)
+		}
+		_, err := s.items.Create(ctx, model.Item{Type: "sentence", CollectionID: &collectionID, ParentID: &parentID, Content: content, Rank: rk})
+		return err
+	}
+
+	imported := 0
+	for _, in := range items {
+		prev = rank.After(prev)
+		switch in.Type {
+		case "card":
+			if _, err := add("card", cardContent(in.Card.Term, in.Card.Definition, in.Card.Image), prev); err != nil {
+				return imported, err
+			}
+		case "quiz":
+			if _, err := add("exercise", quizContent(in.Quiz.Question, in.Quiz.Options), prev); err != nil {
+				return imported, err
+			}
+		case "exercise":
+			exID, err := add("exercise", exerciseContent(in.Exercise.Kind, in.Exercise.Title, in.Exercise.Distractors), prev)
+			if err != nil {
+				return imported, err
+			}
+			sprev := ""
+			for _, sent := range in.Exercise.Sentences {
+				sprev = rank.After(sprev)
+				if err := addSentence(exID, sentenceContent(sent), sprev); err != nil {
+					return imported, err
+				}
+			}
+		default:
+			continue
+		}
+		imported++
+	}
+	return imported, nil
 }
 
 // StageImportExercises stages a bulk exercise import into the draft, including each

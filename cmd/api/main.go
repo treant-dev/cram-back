@@ -96,7 +96,11 @@ func main() {
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.RequestID)
-	r.Use(httprate.LimitByIP(300, time.Minute))
+	// Global IP rate limit — skipped in --seed (dev/test) mode so the e2e harness
+	// (many requests from one localhost IP) doesn't trip 429s. Prod keeps the limit.
+	if !*seedFlag {
+		r.Use(httprate.LimitByIP(300, time.Minute))
+	}
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins(),
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},

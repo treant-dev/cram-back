@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -44,6 +46,27 @@ func allowedOrigins() []string {
 		origins = append(origins, u)
 	}
 	return origins
+}
+
+// openToAnyOrigin reports whether a path is part of the OAuth/MCP surface that third-party
+// clients call from a browser. Discovery, registration and the token endpoint are unauthenticated
+// by definition, and /mcp authenticates by bearer token only — none of them read the session
+// cookie, so an unknown origin gains nothing by calling them.
+//
+// /oauth/approve is deliberately NOT here. It is the one OAuth route that acts on the user's
+// cookie, so opening it would let any page make a signed-in browser grant access to a client the
+// attacker registered a moment earlier.
+func openToAnyOrigin(path string) bool {
+	switch {
+	case path == "/mcp" || strings.HasPrefix(path, "/mcp/"):
+		return true
+	case strings.HasPrefix(path, "/.well-known/oauth-"):
+		return true
+	case path == "/oauth/register" || path == "/oauth/token" || path == "/oauth/authorize":
+		return true
+	default:
+		return false
+	}
 }
 
 func main() {
@@ -107,9 +130,17 @@ func main() {
 		r.Use(httprate.LimitByIP(300, time.Minute))
 	}
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   allowedOrigins(),
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Authorization", "Content-Type"},
+		AllowOriginFunc: func(r *http.Request, origin string) bool {
+			if openToAnyOrigin(r.URL.Path) {
+				return true
+			}
+			return slices.Contains(allowedOrigins(), origin)
+		},
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Authorization", "Content-Type", "MCP-Protocol-Version", "Mcp-Session-Id"},
+		// A client that gets a 401 from /mcp reads this header to find the authorization server;
+		// without exposing it, a browser-based client cannot see it at all.
+		ExposedHeaders:   []string{"WWW-Authenticate", "Mcp-Session-Id"},
 		AllowCredentials: true,
 	}))
 

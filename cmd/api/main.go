@@ -87,8 +87,10 @@ func main() {
 	itemEventRepo := repository.NewItemEventRepository(pool)
 	itemDraftRepo := repository.NewItemDraftRepository(pool)
 	tokenRepo := repository.NewTokenRepository(pool)
+	oauthRepo := repository.NewOAuthRepository(pool)
 	cardSvc := service.NewCollectionService(collectionRepo, followRepo, userRepo, itemRepo, itemProgressRepo, itemEventRepo, itemDraftRepo)
 	tokenSvc := service.NewTokenService(tokenRepo)
+	oauthSvc := service.NewOAuthService(oauthRepo)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -136,6 +138,7 @@ func main() {
 	accountHandler := handler.NewAccountHandler(cardSvc)
 	shareHandler := handler.NewShareHandler(cardSvc)
 	tokensHandler := handler.NewTokensHandler(tokenSvc)
+	oauthHandler := handler.NewOAuthHandler(oauthSvc)
 	aiHandler := handler.NewAIHandler()
 
 	s3Store, s3Err := storage.NewS3Store()
@@ -145,6 +148,15 @@ func main() {
 		cardSvc.SetImageStore(s3Store)
 	}
 	uploadHandler := handler.NewUploadHandler(s3Store)
+	// OAuth 2.1 authorization server. Discovery and the token endpoint are public by
+	// definition; /authorize needs a browser session and gets it from the consent screen.
+	r.Get("/.well-known/oauth-protected-resource", oauthHandler.ProtectedResourceMetadata)
+	r.Get("/.well-known/oauth-protected-resource/mcp", oauthHandler.ProtectedResourceMetadata)
+	r.Get("/.well-known/oauth-authorization-server", oauthHandler.AuthorizationServerMetadata)
+	r.With(httprate.LimitByIP(20, time.Minute)).Post("/oauth/register", oauthHandler.Register)
+	r.Get("/oauth/authorize", oauthHandler.Authorize)
+	r.With(httprate.LimitByIP(60, time.Minute)).Post("/oauth/token", oauthHandler.Token)
+
 	r.Get("/public/collections", cardsHandler.ListPublicCollections)
 	r.Get("/public/collections/{collectionID}", cardsHandler.GetPublicCollection)
 	r.Get("/shared/{token}", shareHandler.View)
@@ -197,6 +209,11 @@ func main() {
 		r.Post("/account/tokens", tokensHandler.Create)
 		r.Get("/account/tokens", tokensHandler.List)
 		r.Delete("/account/tokens/{tokenID}", tokensHandler.Revoke)
+
+		// The consent screen and the list of connected apps both act as the signed-in user.
+		r.Post("/oauth/approve", oauthHandler.Approve)
+		r.Get("/account/connections", oauthHandler.ListGrants)
+		r.Delete("/account/connections/{grantID}", oauthHandler.RevokeGrant)
 		r.Post("/collections/{collectionID}/share", shareHandler.Generate)
 		r.Delete("/collections/{collectionID}/share", shareHandler.Revoke)
 	})
@@ -205,7 +222,7 @@ func main() {
 	// RequireAuth, which falls back to the `jwt` cookie this host also receives.
 	mcpHandler := mcpserver.Handler(mcpserver.Deps{Collections: cardSvc})
 	r.Group(func(r chi.Router) {
-		r.Use(apimiddleware.RequireToken(tokenSvc))
+		r.Use(apimiddleware.RequireToken(tokenSvc, oauthSvc))
 		r.Use(httprate.Limit(60, time.Minute, httprate.WithKeyFuncs(func(r *http.Request) (string, error) {
 			return apimiddleware.TokenID(r), nil
 		})))

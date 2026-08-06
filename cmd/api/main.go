@@ -30,6 +30,7 @@ import (
 	"github.com/treant-dev/cram-go/internal/db"
 	_ "github.com/treant-dev/cram-go/docs"
 	"github.com/treant-dev/cram-go/internal/handler"
+	mcpserver "github.com/treant-dev/cram-go/internal/mcp"
 	apimiddleware "github.com/treant-dev/cram-go/internal/middleware"
 	"github.com/treant-dev/cram-go/internal/repository"
 	"github.com/treant-dev/cram-go/internal/seed"
@@ -85,7 +86,11 @@ func main() {
 	itemProgressRepo := repository.NewItemProgressRepository(pool)
 	itemEventRepo := repository.NewItemEventRepository(pool)
 	itemDraftRepo := repository.NewItemDraftRepository(pool)
+	tokenRepo := repository.NewTokenRepository(pool)
+	oauthRepo := repository.NewOAuthRepository(pool)
 	cardSvc := service.NewCollectionService(collectionRepo, followRepo, userRepo, itemRepo, itemProgressRepo, itemEventRepo, itemDraftRepo)
+	tokenSvc := service.NewTokenService(tokenRepo)
+	oauthSvc := service.NewOAuthService(oauthRepo)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -132,6 +137,8 @@ func main() {
 	adminHandler := handler.NewAdminHandler(cardSvc)
 	accountHandler := handler.NewAccountHandler(cardSvc)
 	shareHandler := handler.NewShareHandler(cardSvc)
+	tokensHandler := handler.NewTokensHandler(tokenSvc)
+	oauthHandler := handler.NewOAuthHandler(oauthSvc)
 	aiHandler := handler.NewAIHandler()
 
 	s3Store, s3Err := storage.NewS3Store()
@@ -141,6 +148,15 @@ func main() {
 		cardSvc.SetImageStore(s3Store)
 	}
 	uploadHandler := handler.NewUploadHandler(s3Store)
+	// OAuth 2.1 authorization server. Discovery and the token endpoint are public by
+	// definition; /authorize needs a browser session and gets it from the consent screen.
+	r.Get("/.well-known/oauth-protected-resource", oauthHandler.ProtectedResourceMetadata)
+	r.Get("/.well-known/oauth-protected-resource/mcp", oauthHandler.ProtectedResourceMetadata)
+	r.Get("/.well-known/oauth-authorization-server", oauthHandler.AuthorizationServerMetadata)
+	r.With(httprate.LimitByIP(20, time.Minute)).Post("/oauth/register", oauthHandler.Register)
+	r.Get("/oauth/authorize", oauthHandler.Authorize)
+	r.With(httprate.LimitByIP(60, time.Minute)).Post("/oauth/token", oauthHandler.Token)
+
 	r.Get("/public/collections", cardsHandler.ListPublicCollections)
 	r.Get("/public/collections/{collectionID}", cardsHandler.GetPublicCollection)
 	r.Get("/shared/{token}", shareHandler.View)
@@ -187,8 +203,31 @@ func main() {
 		r.Get("/collections/{collectionID}/blitz", blitzHandler.Get)
 		r.With(httprate.LimitByIP(30, time.Minute)).Post("/upload", uploadHandler.Upload)
 		r.Delete("/account", accountHandler.Delete)
+
+		// Personal access tokens are managed from a browser session only — never with a
+		// token itself, or a leaked token could mint replacements for its own revocation.
+		r.Post("/account/tokens", tokensHandler.Create)
+		r.Get("/account/tokens", tokensHandler.List)
+		r.Delete("/account/tokens/{tokenID}", tokensHandler.Revoke)
+
+		// The consent screen and the list of connected apps both act as the signed-in user.
+		r.Post("/oauth/approve", oauthHandler.Approve)
+		r.Get("/account/connections", oauthHandler.ListGrants)
+		r.Delete("/account/connections/{grantID}", oauthHandler.RevokeGrant)
 		r.Post("/collections/{collectionID}/share", shareHandler.Generate)
 		r.Delete("/collections/{collectionID}/share", shareHandler.Revoke)
+	})
+
+	// MCP endpoint. Authenticated by personal access token only — deliberately not
+	// RequireAuth, which falls back to the `jwt` cookie this host also receives.
+	mcpHandler := mcpserver.Handler(mcpserver.Deps{Collections: cardSvc})
+	r.Group(func(r chi.Router) {
+		r.Use(apimiddleware.RequireToken(tokenSvc, oauthSvc))
+		r.Use(httprate.Limit(60, time.Minute, httprate.WithKeyFuncs(func(r *http.Request) (string, error) {
+			return apimiddleware.TokenID(r), nil
+		})))
+		r.Handle("/mcp", mcpHandler)
+		r.Handle("/mcp/*", mcpHandler)
 	})
 
 	r.Group(func(r chi.Router) {
@@ -251,6 +290,28 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			auth.CleanupExpired()
+		}
+	}()
+
+	// Housekeeping for credential tables: revoked personal access tokens past their retention
+	// window, and OAuth codes and tokens that can no longer be redeemed. Without this the tables
+	// only grow — nothing else ever deletes from them.
+	go func() {
+		clean := func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			if n, err := tokenSvc.CleanupRevoked(ctx); err != nil {
+				log.Printf("cleanup: revoked tokens: %v", err)
+			} else if n > 0 {
+				log.Printf("cleanup: removed %d revoked token(s) past retention", n)
+			}
+			oauthSvc.CleanupExpired(ctx)
+		}
+		clean() // once at boot, so a restart also collects what accumulated while down
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			clean()
 		}
 	}()
 

@@ -1,18 +1,6 @@
 basePath: /
 definitions:
-  handler.draftItemBody:
-    properties:
-      content:
-        additionalProperties: {}
-        type: object
-      parent_id:
-        type: string
-      rank:
-        type: string
-      type:
-        type: string
-    type: object
-  model.Card:
+  github_com_treant-dev_cram-go_internal_model.Card:
     properties:
       collectionID:
         type: string
@@ -31,11 +19,11 @@ definitions:
       updatedAt:
         type: string
     type: object
-  model.Collection:
+  github_com_treant-dev_cram-go_internal_model.Collection:
     properties:
       cards:
         items:
-          $ref: '#/definitions/model.Card'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Card'
         type: array
       createdAt:
         type: string
@@ -47,7 +35,7 @@ definitions:
         type: string
       exercises:
         items:
-          $ref: '#/definitions/model.Exercise'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Exercise'
         type: array
       id:
         type: string
@@ -56,14 +44,14 @@ definitions:
       items:
         description: unified content (item-model)
         items:
-          $ref: '#/definitions/model.Item'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Item'
         type: array
       shareToken:
         description: non-nil when a share link has been generated
         type: string
       testQuestions:
         items:
-          $ref: '#/definitions/model.TestQuestion'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.TestQuestion'
         type: array
       title:
         type: string
@@ -72,7 +60,7 @@ definitions:
       userID:
         type: string
     type: object
-  model.Exercise:
+  github_com_treant-dev_cram-go_internal_model.Exercise:
     properties:
       CollectionID:
         type: string
@@ -90,7 +78,7 @@ definitions:
         type: string
       Options:
         items:
-          $ref: '#/definitions/model.TestAnswer'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.TestAnswer'
         type: array
       Position:
         type: integer
@@ -100,14 +88,14 @@ definitions:
         type: string
       Sentences:
         items:
-          $ref: '#/definitions/model.ExerciseSentence'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.ExerciseSentence'
         type: array
       Title:
         type: string
       UpdatedAt:
         type: string
     type: object
-  model.ExerciseSentence:
+  github_com_treant-dev_cram-go_internal_model.ExerciseSentence:
     properties:
       answer:
         description: one word per blank, in order
@@ -128,7 +116,7 @@ definitions:
       text:
         type: string
     type: object
-  model.Item:
+  github_com_treant-dev_cram-go_internal_model.Item:
     properties:
       collectionID:
         description: nil = free-floating
@@ -152,7 +140,7 @@ definitions:
       updatedAt:
         type: string
     type: object
-  model.TestAnswer:
+  github_com_treant-dev_cram-go_internal_model.TestAnswer:
     properties:
       explanation:
         type: string
@@ -165,7 +153,7 @@ definitions:
       text:
         type: string
     type: object
-  model.TestQuestion:
+  github_com_treant-dev_cram-go_internal_model.TestQuestion:
     properties:
       collectionID:
         type: string
@@ -177,7 +165,7 @@ definitions:
         type: string
       options:
         items:
-          $ref: '#/definitions/model.TestAnswer'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.TestAnswer'
         type: array
       position:
         type: integer
@@ -186,7 +174,7 @@ definitions:
       updatedAt:
         type: string
     type: object
-  service.DraftCardInput:
+  github_com_treant-dev_cram-go_internal_service.DraftCardInput:
     properties:
       definition:
         type: string
@@ -197,22 +185,22 @@ definitions:
       term:
         type: string
     type: object
-  service.DraftDiff:
+  github_com_treant-dev_cram-go_internal_service.DraftDiff:
     properties:
       Entries:
         items:
-          $ref: '#/definitions/service.DraftDiffEntry'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_service.DraftDiffEntry'
         type: array
     type: object
-  service.DraftDiffEntry:
+  github_com_treant-dev_cram-go_internal_service.DraftDiffEntry:
     properties:
       After:
         allOf:
-        - $ref: '#/definitions/model.Item'
+        - $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Item'
         description: staged result; nil when deleted
       Before:
         allOf:
-        - $ref: '#/definitions/model.Item'
+        - $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Item'
         description: published item; nil when added
       ItemID:
         type: string
@@ -222,7 +210,7 @@ definitions:
       Type:
         type: string
     type: object
-  service.DraftTestInput:
+  github_com_treant-dev_cram-go_internal_service.DraftTestInput:
     properties:
       id:
         type: string
@@ -230,27 +218,27 @@ definitions:
         type: string
       options:
         items:
-          $ref: '#/definitions/model.TestAnswer'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.TestAnswer'
         type: array
       question:
         type: string
     type: object
-  service.HomeData:
+  github_com_treant-dev_cram-go_internal_service.HomeData:
     properties:
       following:
         items:
-          $ref: '#/definitions/model.Collection'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Collection'
         type: array
       own:
         items:
-          $ref: '#/definitions/model.Collection'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Collection'
         type: array
     type: object
-  service.PublicCollectionMeta:
+  github_com_treant-dev_cram-go_internal_service.PublicCollectionMeta:
     properties:
       cards:
         items:
-          $ref: '#/definitions/model.Card'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Card'
         type: array
       createdAt:
         type: string
@@ -262,7 +250,7 @@ definitions:
         type: string
       exercises:
         items:
-          $ref: '#/definitions/model.Exercise'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Exercise'
         type: array
       followerCount:
         type: integer
@@ -275,14 +263,14 @@ definitions:
       items:
         description: unified content (item-model)
         items:
-          $ref: '#/definitions/model.Item'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Item'
         type: array
       shareToken:
         description: non-nil when a share link has been generated
         type: string
       testQuestions:
         items:
-          $ref: '#/definitions/model.TestQuestion'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.TestQuestion'
         type: array
       title:
         type: string
@@ -291,11 +279,11 @@ definitions:
       userID:
         type: string
     type: object
-  service.UpdateDraftReq:
+  github_com_treant-dev_cram-go_internal_service.UpdateDraftReq:
     properties:
       cards:
         items:
-          $ref: '#/definitions/service.DraftCardInput'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_service.DraftCardInput'
         type: array
       description:
         type: string
@@ -303,16 +291,16 @@ definitions:
         type: boolean
       testQuestions:
         items:
-          $ref: '#/definitions/service.DraftTestInput'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_service.DraftTestInput'
         type: array
       title:
         type: string
     type: object
-  service.UserWithCollections:
+  github_com_treant-dev_cram-go_internal_service.UserWithCollections:
     properties:
       collections:
         items:
-          $ref: '#/definitions/model.Collection'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Collection'
         type: array
       id:
         type: string
@@ -323,6 +311,18 @@ definitions:
       role:
         type: string
     type: object
+  internal_handler.draftItemBody:
+    properties:
+      content:
+        additionalProperties: {}
+        type: object
+      parent_id:
+        type: string
+      rank:
+        type: string
+      type:
+        type: string
+    type: object
 host: localhost:8080
 info:
   contact: {}
@@ -330,6 +330,189 @@ info:
   title: Cram API
   version: "1.0"
 paths:
+  /.well-known/oauth-authorization-server:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: OAuth authorization server metadata (RFC 8414)
+      tags:
+      - oauth
+  /.well-known/oauth-protected-resource:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: OAuth protected resource metadata (RFC 9728)
+      tags:
+      - oauth
+  /account/connections:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+      security:
+      - BearerAuth: []
+      summary: List connected applications
+      tags:
+      - oauth
+  /account/connections/{grantID}:
+    delete:
+      description: Revokes the grant and every token issued under it, effective immediately.
+      parameters:
+      - description: Grant ID
+        in: path
+        name: grantID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: revoked
+      security:
+      - BearerAuth: []
+      summary: Disconnect an application
+      tags:
+      - oauth
+  /account/tokens:
+    get:
+      description: |-
+        Metadata only — token values are never returned. Revoked tokens are included so
+        the UI can show history.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              properties:
+                created_at:
+                  type: string
+                expires_at:
+                  type: string
+                id:
+                  type: string
+                last_used_at:
+                  type: string
+                name:
+                  type: string
+                revoked_at:
+                  type: string
+                scope:
+                  type: string
+              type: object
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: List personal access tokens
+      tags:
+      - tokens
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Mints a long-lived bearer token for non-browser clients (the MCP server). The
+        plaintext value is returned by this call only and cannot be retrieved afterwards.
+      parameters:
+      - description: name, scope ('read' or 'read_write'), optional expires_at
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            expires_at:
+              type: string
+            name:
+              type: string
+            scope:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            properties:
+              created_at:
+                type: string
+              id:
+                type: string
+              name:
+                type: string
+              scope:
+                type: string
+              token:
+                type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Create a personal access token
+      tags:
+      - tokens
+  /account/tokens/{tokenID}:
+    delete:
+      description: Takes effect on the very next request; no restart, no waiting for
+        expiry.
+      parameters:
+      - description: Token ID
+        in: path
+        name: tokenID
+        required: true
+        type: string
+      responses:
+        "204":
+          description: revoked
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Revoke a personal access token
+      tags:
+      - tokens
   /collections:
     get:
       produces:
@@ -339,7 +522,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/model.Collection'
+              $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Collection'
             type: array
         "500":
           description: Internal Server Error
@@ -373,7 +556,7 @@ paths:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/model.Collection'
+            $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Collection'
         "400":
           description: Bad Request
           schema:
@@ -420,7 +603,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.Collection'
+            $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Collection'
         "404":
           description: Not Found
           schema:
@@ -458,7 +641,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.Collection'
+            $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Collection'
         "404":
           description: Not Found
           schema:
@@ -497,7 +680,7 @@ paths:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/model.Card'
+            $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Card'
         "404":
           description: Not Found
           schema:
@@ -565,7 +748,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.Card'
+            $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Card'
         "404":
           description: Not Found
           schema:
@@ -644,7 +827,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.Collection'
+            $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Collection'
         "404":
           description: Not Found
           schema:
@@ -668,7 +851,7 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/service.UpdateDraftReq'
+          $ref: '#/definitions/github_com_treant-dev_cram-go_internal_service.UpdateDraftReq'
       responses:
         "204":
           description: No Content
@@ -697,7 +880,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/service.DraftDiff'
+            $ref: '#/definitions/github_com_treant-dev_cram-go_internal_service.DraftDiff'
         "404":
           description: Not Found
           schema:
@@ -720,12 +903,12 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/handler.draftItemBody'
+          $ref: '#/definitions/internal_handler.draftItemBody'
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.Item'
+            $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Item'
         "400":
           description: Bad Request
           schema:
@@ -773,12 +956,12 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/handler.draftItemBody'
+          $ref: '#/definitions/internal_handler.draftItemBody'
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.Item'
+            $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.Item'
         "400":
           description: Bad Request
           schema:
@@ -786,6 +969,33 @@ paths:
       security:
       - BearerAuth: []
       summary: Stage an edit to a single item in the draft
+      tags:
+      - drafts
+  /collections/{collectionID}/draft/items/{itemID}/move:
+    post:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Item ID
+        in: path
+        name: itemID
+        required: true
+        type: string
+      - description: '{after_id, before_id}'
+        in: body
+        name: body
+        required: true
+        schema:
+          type: object
+      responses:
+        "204":
+          description: No Content
+      security:
+      - BearerAuth: []
+      summary: Reorder one item in the draft (place between two neighbors)
       tags:
       - drafts
   /collections/{collectionID}/draft/items/{itemID}/revert:
@@ -893,6 +1103,34 @@ paths:
       summary: Follow a collection
       tags:
       - follows
+  /collections/{collectionID}/import:
+    post:
+      parameters:
+      - description: Collection ID
+        in: path
+        name: collectionID
+        required: true
+        type: string
+      - description: Stage into the draft instead of writing live
+        in: query
+        name: draft
+        type: boolean
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties:
+              type: integer
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+      security:
+      - BearerAuth: []
+      summary: Bulk import a mixed list of items (card/quiz/exercise) from JSON/YAML
+      tags:
+      - collections
   /collections/{collectionID}/tests:
     post:
       consumes:
@@ -911,7 +1149,7 @@ paths:
           properties:
             options:
               items:
-                $ref: '#/definitions/model.TestAnswer'
+                $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.TestAnswer'
               type: array
             position:
               type: integer
@@ -924,7 +1162,7 @@ paths:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/model.TestQuestion'
+            $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.TestQuestion'
         "404":
           description: Not Found
           schema:
@@ -981,7 +1219,7 @@ paths:
           properties:
             options:
               items:
-                $ref: '#/definitions/model.TestAnswer'
+                $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.TestAnswer'
               type: array
             position:
               type: integer
@@ -994,7 +1232,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.TestQuestion'
+            $ref: '#/definitions/github_com_treant-dev_cram-go_internal_model.TestQuestion'
         "404":
           description: Not Found
           schema:
@@ -1016,7 +1254,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/service.HomeData'
+            $ref: '#/definitions/github_com_treant-dev_cram-go_internal_service.HomeData'
         "500":
           description: Internal Server Error
           schema:
@@ -1026,6 +1264,78 @@ paths:
       summary: Get home page data (own + followed collections)
       tags:
       - collections
+  /oauth/approve:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: redirect_to
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Grant an OAuth client access (called by the consent screen)
+      tags:
+      - oauth
+  /oauth/authorize:
+    get:
+      description: Validates the request, then hands off to the consent screen in
+        the web app.
+      responses:
+        "302":
+          description: redirect to consent or back to the client
+          schema:
+            type: string
+      summary: OAuth authorization endpoint
+      tags:
+      - oauth
+  /oauth/register:
+    post:
+      consumes:
+      - application/json
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Register an OAuth client (RFC 7591)
+      tags:
+      - oauth
+  /oauth/token:
+    post:
+      consumes:
+      - application/x-www-form-urlencoded
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: OAuth token endpoint
+      tags:
+      - oauth
   /public/collections:
     get:
       produces:
@@ -1035,7 +1345,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/service.PublicCollectionMeta'
+              $ref: '#/definitions/github_com_treant-dev_cram-go_internal_service.PublicCollectionMeta'
             type: array
       summary: List all public collections with follow metadata
       tags:
@@ -1049,7 +1359,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/service.UserWithCollections'
+              $ref: '#/definitions/github_com_treant-dev_cram-go_internal_service.UserWithCollections'
             type: array
         "500":
           description: Internal Server Error

@@ -15,6 +15,288 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/.well-known/oauth-authorization-server": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "oauth"
+                ],
+                "summary": "OAuth authorization server metadata (RFC 8414)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/.well-known/oauth-protected-resource": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "oauth"
+                ],
+                "summary": "OAuth protected resource metadata (RFC 9728)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/account/connections": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "oauth"
+                ],
+                "summary": "List connected applications",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": true
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/account/connections/{grantID}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Revokes the grant and every token issued under it, effective immediately.",
+                "tags": [
+                    "oauth"
+                ],
+                "summary": "Disconnect an application",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Grant ID",
+                        "name": "grantID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "revoked"
+                    }
+                }
+            }
+        },
+        "/account/tokens": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Metadata only — token values are never returned. Revoked tokens are included so\nthe UI can show history.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tokens"
+                ],
+                "summary": "List personal access tokens",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "created_at": {
+                                        "type": "string"
+                                    },
+                                    "expires_at": {
+                                        "type": "string"
+                                    },
+                                    "id": {
+                                        "type": "string"
+                                    },
+                                    "last_used_at": {
+                                        "type": "string"
+                                    },
+                                    "name": {
+                                        "type": "string"
+                                    },
+                                    "revoked_at": {
+                                        "type": "string"
+                                    },
+                                    "scope": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Mints a long-lived bearer token for non-browser clients (the MCP server). The\nplaintext value is returned by this call only and cannot be retrieved afterwards.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tokens"
+                ],
+                "summary": "Create a personal access token",
+                "parameters": [
+                    {
+                        "description": "name, scope ('read' or 'read_write'), optional expires_at",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "expires_at": {
+                                    "type": "string"
+                                },
+                                "name": {
+                                    "type": "string"
+                                },
+                                "scope": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "created_at": {
+                                    "type": "string"
+                                },
+                                "id": {
+                                    "type": "string"
+                                },
+                                "name": {
+                                    "type": "string"
+                                },
+                                "scope": {
+                                    "type": "string"
+                                },
+                                "token": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/account/tokens/{tokenID}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Takes effect on the very next request; no restart, no waiting for expiry.",
+                "tags": [
+                    "tokens"
+                ],
+                "summary": "Revoke a personal access token",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Token ID",
+                        "name": "tokenID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "revoked"
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/collections": {
             "get": {
                 "security": [
@@ -35,7 +317,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/model.Collection"
+                                "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Collection"
                             }
                         }
                     },
@@ -89,7 +371,7 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/model.Collection"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Collection"
                         }
                     },
                     "400": {
@@ -134,7 +416,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.Collection"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Collection"
                         }
                     },
                     "404": {
@@ -194,7 +476,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.Collection"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Collection"
                         }
                     },
                     "404": {
@@ -287,7 +569,7 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/model.Card"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Card"
                         }
                     },
                     "404": {
@@ -413,7 +695,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.Card"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Card"
                         }
                     },
                     "404": {
@@ -491,7 +773,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/service.UpdateDraftReq"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_service.UpdateDraftReq"
                         }
                     }
                 ],
@@ -539,7 +821,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.Collection"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Collection"
                         }
                     },
                     "404": {
@@ -606,7 +888,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/service.DraftDiff"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_service.DraftDiff"
                         }
                     },
                     "404": {
@@ -643,7 +925,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handler.draftItemBody"
+                            "$ref": "#/definitions/internal_handler.draftItemBody"
                         }
                     }
                 ],
@@ -651,7 +933,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.Item"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Item"
                         }
                     },
                     "400": {
@@ -695,7 +977,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handler.draftItemBody"
+                            "$ref": "#/definitions/internal_handler.draftItemBody"
                         }
                     }
                 ],
@@ -703,7 +985,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.Item"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Item"
                         }
                     },
                     "400": {
@@ -738,6 +1020,49 @@ const docTemplate = `{
                         "name": "itemID",
                         "in": "path",
                         "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    }
+                }
+            }
+        },
+        "/collections/{collectionID}/draft/items/{itemID}/move": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "drafts"
+                ],
+                "summary": "Reorder one item in the draft (place between two neighbors)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Collection ID",
+                        "name": "collectionID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Item ID",
+                        "name": "itemID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "{after_id, before_id}",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
                     }
                 ],
                 "responses": {
@@ -919,6 +1244,51 @@ const docTemplate = `{
                 }
             }
         },
+        "/collections/{collectionID}/import": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "collections"
+                ],
+                "summary": "Bulk import a mixed list of items (card/quiz/exercise) from JSON/YAML",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Collection ID",
+                        "name": "collectionID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Stage into the draft instead of writing live",
+                        "name": "draft",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/collections/{collectionID}/tests": {
             "post": {
                 "security": [
@@ -955,7 +1325,7 @@ const docTemplate = `{
                                 "options": {
                                     "type": "array",
                                     "items": {
-                                        "$ref": "#/definitions/model.TestAnswer"
+                                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.TestAnswer"
                                     }
                                 },
                                 "position": {
@@ -972,7 +1342,7 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/model.TestQuestion"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.TestQuestion"
                         }
                     },
                     "404": {
@@ -1033,7 +1403,7 @@ const docTemplate = `{
                                 "options": {
                                     "type": "array",
                                     "items": {
-                                        "$ref": "#/definitions/model.TestAnswer"
+                                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.TestAnswer"
                                     }
                                 },
                                 "position": {
@@ -1050,7 +1420,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/model.TestQuestion"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.TestQuestion"
                         }
                     },
                     "404": {
@@ -1118,13 +1488,124 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/service.HomeData"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_service.HomeData"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
                             "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/oauth/approve": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "oauth"
+                ],
+                "summary": "Grant an OAuth client access (called by the consent screen)",
+                "responses": {
+                    "200": {
+                        "description": "redirect_to",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/oauth/authorize": {
+            "get": {
+                "description": "Validates the request, then hands off to the consent screen in the web app.",
+                "tags": [
+                    "oauth"
+                ],
+                "summary": "OAuth authorization endpoint",
+                "responses": {
+                    "302": {
+                        "description": "redirect to consent or back to the client",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/oauth/register": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "oauth"
+                ],
+                "summary": "Register an OAuth client (RFC 7591)",
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/oauth/token": {
+            "post": {
+                "consumes": [
+                    "application/x-www-form-urlencoded"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "oauth"
+                ],
+                "summary": "OAuth token endpoint",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -1145,7 +1626,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/service.PublicCollectionMeta"
+                                "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_service.PublicCollectionMeta"
                             }
                         }
                     }
@@ -1167,7 +1648,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/service.UserWithCollections"
+                                "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_service.UserWithCollections"
                             }
                         }
                     },
@@ -1182,25 +1663,7 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "handler.draftItemBody": {
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "parent_id": {
-                    "type": "string"
-                },
-                "rank": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "string"
-                }
-            }
-        },
-        "model.Card": {
+        "github_com_treant-dev_cram-go_internal_model.Card": {
             "type": "object",
             "properties": {
                 "collectionID": {
@@ -1229,13 +1692,13 @@ const docTemplate = `{
                 }
             }
         },
-        "model.Collection": {
+        "github_com_treant-dev_cram-go_internal_model.Collection": {
             "type": "object",
             "properties": {
                 "cards": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.Card"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Card"
                     }
                 },
                 "createdAt": {
@@ -1251,7 +1714,7 @@ const docTemplate = `{
                 "exercises": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.Exercise"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Exercise"
                     }
                 },
                 "id": {
@@ -1264,7 +1727,7 @@ const docTemplate = `{
                     "description": "unified content (item-model)",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.Item"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Item"
                     }
                 },
                 "shareToken": {
@@ -1274,7 +1737,7 @@ const docTemplate = `{
                 "testQuestions": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.TestQuestion"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.TestQuestion"
                     }
                 },
                 "title": {
@@ -1288,7 +1751,7 @@ const docTemplate = `{
                 }
             }
         },
-        "model.Exercise": {
+        "github_com_treant-dev_cram-go_internal_model.Exercise": {
             "type": "object",
             "properties": {
                 "CollectionID": {
@@ -1314,7 +1777,7 @@ const docTemplate = `{
                 "Options": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.TestAnswer"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.TestAnswer"
                     }
                 },
                 "Position": {
@@ -1327,7 +1790,7 @@ const docTemplate = `{
                 "Sentences": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.ExerciseSentence"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.ExerciseSentence"
                     }
                 },
                 "Title": {
@@ -1338,7 +1801,7 @@ const docTemplate = `{
                 }
             }
         },
-        "model.ExerciseSentence": {
+        "github_com_treant-dev_cram-go_internal_model.ExerciseSentence": {
             "type": "object",
             "properties": {
                 "answer": {
@@ -1369,7 +1832,7 @@ const docTemplate = `{
                 }
             }
         },
-        "model.Item": {
+        "github_com_treant-dev_cram-go_internal_model.Item": {
             "type": "object",
             "properties": {
                 "collectionID": {
@@ -1403,7 +1866,7 @@ const docTemplate = `{
                 }
             }
         },
-        "model.TestAnswer": {
+        "github_com_treant-dev_cram-go_internal_model.TestAnswer": {
             "type": "object",
             "properties": {
                 "explanation": {
@@ -1423,7 +1886,7 @@ const docTemplate = `{
                 }
             }
         },
-        "model.TestQuestion": {
+        "github_com_treant-dev_cram-go_internal_model.TestQuestion": {
             "type": "object",
             "properties": {
                 "collectionID": {
@@ -1441,7 +1904,7 @@ const docTemplate = `{
                 "options": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.TestAnswer"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.TestAnswer"
                     }
                 },
                 "position": {
@@ -1455,7 +1918,7 @@ const docTemplate = `{
                 }
             }
         },
-        "service.DraftCardInput": {
+        "github_com_treant-dev_cram-go_internal_service.DraftCardInput": {
             "type": "object",
             "properties": {
                 "definition": {
@@ -1472,25 +1935,25 @@ const docTemplate = `{
                 }
             }
         },
-        "service.DraftDiff": {
+        "github_com_treant-dev_cram-go_internal_service.DraftDiff": {
             "type": "object",
             "properties": {
                 "Entries": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/service.DraftDiffEntry"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_service.DraftDiffEntry"
                     }
                 }
             }
         },
-        "service.DraftDiffEntry": {
+        "github_com_treant-dev_cram-go_internal_service.DraftDiffEntry": {
             "type": "object",
             "properties": {
                 "After": {
                     "description": "staged result; nil when deleted",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/model.Item"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Item"
                         }
                     ]
                 },
@@ -1498,7 +1961,7 @@ const docTemplate = `{
                     "description": "published item; nil when added",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/model.Item"
+                            "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Item"
                         }
                     ]
                 },
@@ -1514,7 +1977,7 @@ const docTemplate = `{
                 }
             }
         },
-        "service.DraftTestInput": {
+        "github_com_treant-dev_cram-go_internal_service.DraftTestInput": {
             "type": "object",
             "properties": {
                 "id": {
@@ -1526,7 +1989,7 @@ const docTemplate = `{
                 "options": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.TestAnswer"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.TestAnswer"
                     }
                 },
                 "question": {
@@ -1534,30 +1997,30 @@ const docTemplate = `{
                 }
             }
         },
-        "service.HomeData": {
+        "github_com_treant-dev_cram-go_internal_service.HomeData": {
             "type": "object",
             "properties": {
                 "following": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.Collection"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Collection"
                     }
                 },
                 "own": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.Collection"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Collection"
                     }
                 }
             }
         },
-        "service.PublicCollectionMeta": {
+        "github_com_treant-dev_cram-go_internal_service.PublicCollectionMeta": {
             "type": "object",
             "properties": {
                 "cards": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.Card"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Card"
                     }
                 },
                 "createdAt": {
@@ -1573,7 +2036,7 @@ const docTemplate = `{
                 "exercises": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.Exercise"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Exercise"
                     }
                 },
                 "followerCount": {
@@ -1592,7 +2055,7 @@ const docTemplate = `{
                     "description": "unified content (item-model)",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.Item"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Item"
                     }
                 },
                 "shareToken": {
@@ -1602,7 +2065,7 @@ const docTemplate = `{
                 "testQuestions": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.TestQuestion"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.TestQuestion"
                     }
                 },
                 "title": {
@@ -1616,13 +2079,13 @@ const docTemplate = `{
                 }
             }
         },
-        "service.UpdateDraftReq": {
+        "github_com_treant-dev_cram-go_internal_service.UpdateDraftReq": {
             "type": "object",
             "properties": {
                 "cards": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/service.DraftCardInput"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_service.DraftCardInput"
                     }
                 },
                 "description": {
@@ -1634,7 +2097,7 @@ const docTemplate = `{
                 "testQuestions": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/service.DraftTestInput"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_service.DraftTestInput"
                     }
                 },
                 "title": {
@@ -1642,13 +2105,13 @@ const docTemplate = `{
                 }
             }
         },
-        "service.UserWithCollections": {
+        "github_com_treant-dev_cram-go_internal_service.UserWithCollections": {
             "type": "object",
             "properties": {
                 "collections": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/model.Collection"
+                        "$ref": "#/definitions/github_com_treant-dev_cram-go_internal_model.Collection"
                     }
                 },
                 "id": {
@@ -1661,6 +2124,24 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "role": {
+                    "type": "string"
+                }
+            }
+        },
+        "internal_handler.draftItemBody": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "parent_id": {
+                    "type": "string"
+                },
+                "rank": {
+                    "type": "string"
+                },
+                "type": {
                     "type": "string"
                 }
             }

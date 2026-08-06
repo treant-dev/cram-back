@@ -53,6 +53,12 @@ type Deps struct {
 // Handler builds the /mcp handler. Mount it behind middleware.RequireToken: this handler assumes
 // claims are already in the request context and does no authentication of its own.
 func Handler(deps Deps) http.Handler {
+	// Build one server up front. AddTool panics on a malformed schema (a jsonschema tag
+	// beginning with "word=" is read as a directive, for instance), and because a server is
+	// built per request that panic would otherwise land on every call as a 500 instead of at
+	// boot, where a broken tool definition belongs.
+	(&session{deps: deps}).buildServer()
+
 	h := sdk.NewStreamableHTTPHandler(
 		func(r *http.Request) *sdk.Server { return newServer(deps, r) },
 		&sdk.StreamableHTTPOptions{
@@ -96,8 +102,15 @@ func newServer(deps Deps, r *http.Request) *sdk.Server {
 		s.userID = claims.UserID
 	}
 
+	return s.buildServer()
+}
+
+func (s *session) buildServer() *sdk.Server {
 	srv := sdk.NewServer(&sdk.Implementation{Name: serverName, Version: serverVersion}, nil)
 	s.addReadTools(srv)
+	// Write tools are registered for read-only tokens too, and refuse with an explanation. A
+	// model that cannot see the tool reports "I can't do that" without saying why.
+	s.addWriteTools(srv)
 	return srv
 }
 

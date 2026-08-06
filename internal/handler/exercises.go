@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/treant-dev/cram-go/internal/itemimport"
 	"github.com/treant-dev/cram-go/internal/model"
 	"github.com/treant-dev/cram-go/internal/service"
 	"gopkg.in/yaml.v3"
@@ -199,68 +200,28 @@ func (h *CardsHandler) ImportItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validation is shared with the MCP tools (internal/itemimport) so the two cannot drift.
+	// Policy differs: here a bad entry is skipped and counted, as the CSV import always did.
 	var items []service.ImportItem
 	skipped, sentenceCount := 0, 0
 	for _, it := range parsed {
-		switch strings.TrimSpace(it.Type) {
-		case "card":
-			// Prefer term/definition (canonical); fall back to question/answer aliases.
-			term := strings.TrimSpace(it.Term)
-			if term == "" {
-				term = strings.TrimSpace(it.Question)
-			}
-			def := strings.TrimSpace(it.Definition)
-			if def == "" {
-				def = strings.TrimSpace(it.Answer)
-			}
-			if term == "" || def == "" {
-				skipped++
-				continue
-			}
-			items = append(items, service.ImportItem{Type: "card", Card: &model.Card{Term: term, Definition: def}})
-		case "quiz":
-			var opts []model.TestAnswer
-			for _, o := range it.Options {
-				if t := strings.TrimSpace(o.Text); t != "" {
-					opts = append(opts, model.TestAnswer{Text: t, IsCorrect: o.Correct})
-				}
-			}
-			if strings.TrimSpace(it.Question) == "" || len(opts) < 2 || !hasCorrectOption(opts) {
-				skipped++
-				continue
-			}
-			items = append(items, service.ImportItem{Type: "quiz", Quiz: &model.TestQuestion{Question: strings.TrimSpace(it.Question), Options: opts}})
-		case "exercise":
-			kind := strings.TrimSpace(it.Kind)
-			if kind != "bank" && kind != "choice" {
-				skipped++
-				continue
-			}
-			ex := model.Exercise{Kind: kind, Title: strings.TrimSpace(it.Title)}
-			if kind == "bank" {
-				for _, d := range it.Distractors {
-					if d = strings.TrimSpace(d); d != "" {
-						ex.Distractors = append(ex.Distractors, d)
-					}
-				}
-			}
-			for _, ys := range it.Sentences {
-				s, ok := buildSentence(kind, ys)
-				if !ok {
-					skipped++
-					continue
-				}
-				ex.Sentences = append(ex.Sentences, s)
-				sentenceCount++
-			}
-			if len(ex.Sentences) == 0 {
-				skipped++
-				continue
-			}
-			items = append(items, service.ImportItem{Type: "exercise", Exercise: &ex})
-		default:
-			skipped++
+		entry := itemimport.Entry{
+			Type: it.Type, Term: it.Term, Definition: firstNonEmpty(it.Definition, it.Answer),
+			Question: it.Question, Kind: it.Kind, Title: it.Title, Distractors: it.Distractors,
 		}
+		for _, o := range it.Options {
+			entry.Options = append(entry.Options, itemimport.Option{Text: o.Text, Correct: o.Correct})
+		}
+		for _, ys := range it.Sentences {
+			entry.Sentences = append(entry.Sentences, itemimport.Sentence{Text: ys.Text, Answer: ys.Answer, Distractors: ys.Distractors})
+		}
+		built, err := itemimport.BuildItem(entry)
+		if err != nil {
+			skipped++
+			continue
+		}
+		sentenceCount += itemimport.CountSentences(entry)
+		items = append(items, built)
 	}
 
 	if len(items) == 0 {
@@ -321,4 +282,14 @@ func buildSentence(kind string, ys yamlSentence) (model.ExerciseSentence, bool) 
 		}
 	}
 	return s, true
+}
+
+// firstNonEmpty returns the first trimmed non-empty value, for the import aliases.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
 }

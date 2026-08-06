@@ -437,3 +437,69 @@ func TestReapprovalReusesTheGrant(t *testing.T) {
 		t.Errorf("grants = %d, want 1 after re-approving the same client", len(grants))
 	}
 }
+
+// scope is a space-delimited set in OAuth. We advertise two of them, so a client asking for
+// everything it saw sends "read read_write" — refusing that is refusing our own advertisement,
+// and it is exactly what broke the first attempt to add the connector in Claude.
+func TestResolveScope(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"read", model.ScopeRead},
+		{"read_write", model.ScopeReadWrite},
+		{"read read_write", model.ScopeReadWrite},
+		{"read_write read", model.ScopeReadWrite},
+		{"  read   read_write  ", model.ScopeReadWrite},
+		// Scopes we do not have are ignored, not refused: a client asking for OpenID claims on
+		// top is asking for something absent, which is no reason to reject the whole request.
+		{"openid profile read", model.ScopeRead},
+		{"openid profile", ""},
+		{"write", ""},
+	}
+	for _, tc := range cases {
+		if got := resolveScope(tc.in); got != tc.want {
+			t.Errorf("resolveScope(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestRegisterAcceptsAScopeList(t *testing.T) {
+	svc := NewOAuthService(newFakeOAuthRepo())
+	client, err := svc.RegisterClient(context.Background(), "Claude", []string{"https://claude.ai/api/mcp/auth_callback"}, "read read_write")
+	if err != nil {
+		t.Fatalf("register with a scope list: %v", err)
+	}
+	if client.Scope != model.ScopeReadWrite {
+		t.Errorf("scope = %q, want the widest requested", client.Scope)
+	}
+
+	// Nothing recognisable still registers — as a read-only client.
+	client, err = svc.RegisterClient(context.Background(), "Odd", []string{"https://example.com/cb"}, "openid profile")
+	if err != nil {
+		t.Fatalf("register with unknown scopes: %v", err)
+	}
+	if client.Scope != model.ScopeRead {
+		t.Errorf("scope = %q, want read", client.Scope)
+	}
+}
+
+func TestAuthorizeAcceptsAScopeList(t *testing.T) {
+	svc, _, client := setup(t)
+	_, challenge := pkce()
+
+	req, err := svc.ValidateAuthorize(context.Background(), client.ID, "http://127.0.0.1:1234/cb", "code", challenge, "S256", "read read_write", "")
+	if err != nil {
+		t.Fatalf("authorize with a scope list: %v", err)
+	}
+	if req.Scope != model.ScopeReadWrite {
+		t.Errorf("scope = %q, want read_write", req.Scope)
+	}
+
+	// Only unknown scopes: fall back to what the client registered with rather than fail.
+	req, err = svc.ValidateAuthorize(context.Background(), client.ID, "http://127.0.0.1:1234/cb", "code", challenge, "S256", "openid", "")
+	if err != nil {
+		t.Fatalf("authorize with unknown scopes: %v", err)
+	}
+	if req.Scope != client.Scope {
+		t.Errorf("scope = %q, want the client's registered %q", req.Scope, client.Scope)
+	}
+}

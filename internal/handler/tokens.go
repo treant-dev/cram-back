@@ -88,6 +88,15 @@ func (h *TokensHandler) Create(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if errors.Is(err, service.ErrTokenRateLimited) {
+			http.Error(w, err.Error(), http.StatusTooManyRequests)
+			return
+		}
+		if errors.Is(err, service.ErrTooManyTokens) {
+			// 409: the request is well-formed, the account state is what refuses it.
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		handleErr(w, err)
 		return
 	}

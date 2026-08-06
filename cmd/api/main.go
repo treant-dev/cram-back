@@ -293,6 +293,28 @@ func main() {
 		}
 	}()
 
+	// Housekeeping for credential tables: revoked personal access tokens past their retention
+	// window, and OAuth codes and tokens that can no longer be redeemed. Without this the tables
+	// only grow — nothing else ever deletes from them.
+	go func() {
+		clean := func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			if n, err := tokenSvc.CleanupRevoked(ctx); err != nil {
+				log.Printf("cleanup: revoked tokens: %v", err)
+			} else if n > 0 {
+				log.Printf("cleanup: removed %d revoked token(s) past retention", n)
+			}
+			oauthSvc.CleanupExpired(ctx)
+		}
+		clean() // once at boot, so a restart also collects what accumulated while down
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			clean()
+		}
+	}()
+
 	srv := &http.Server{
 		Addr:         ":" + port,
 		Handler:      r,

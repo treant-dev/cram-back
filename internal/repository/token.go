@@ -109,6 +109,71 @@ func (r *TokenRepository) Revoke(ctx context.Context, tokenID, userID string) er
 	return nil
 }
 
+// CountLive counts tokens the user can still authenticate with.
+func (r *TokenRepository) CountLive(ctx context.Context, userID string) (int, error) {
+	var n int
+	err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM personal_access_tokens
+		 WHERE user_id = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())`,
+		userID,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count live tokens: %w", err)
+	}
+	return n, nil
+}
+
+// CountCreatedSince counts every token minted in the window, revoked ones included — the daily
+// cap is about issuance, not about how many survive.
+func (r *TokenRepository) CountCreatedSince(ctx context.Context, userID string, since time.Time) (int, error) {
+	var n int
+	err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM personal_access_tokens WHERE user_id = $1 AND created_at >= $2`,
+		userID, since,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count tokens created since: %w", err)
+	}
+	return n, nil
+}
+
+// TrimRevoked keeps only the newest `keep` revoked tokens and deletes the rest. A revoked row is
+// there to answer "did I revoke it, and when" — after a few of them it is noise that pushes live
+// tokens down the page, and nothing else reads it: there is no per-token audit log.
+//
+// Rows younger than `protect` are never deleted, whatever the count: the daily issuance cap is
+// computed from these rows, so trimming them away would let a create-then-revoke loop mint
+// tokens without limit.
+func (r *TokenRepository) TrimRevoked(ctx context.Context, userID string, keep int, protect time.Duration) error {
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM personal_access_tokens
+		 WHERE user_id = $1 AND revoked_at IS NOT NULL
+		   AND created_at < NOW() - $3::interval
+		   AND id NOT IN (
+		     SELECT id FROM personal_access_tokens
+		     WHERE user_id = $1 AND revoked_at IS NOT NULL
+		     ORDER BY revoked_at DESC LIMIT $2
+		   )`,
+		userID, keep, protect.String(),
+	)
+	if err != nil {
+		return fmt.Errorf("trim revoked tokens: %w", err)
+	}
+	return nil
+}
+
+// DeleteRevokedBefore drops revoked tokens older than the cutoff, for every user. The count cap
+// in TrimRevoked bounds a busy account; this bounds a quiet one, where ten stale rows would sit
+// in the list for years.
+func (r *TokenRepository) DeleteRevokedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := r.pool.Exec(ctx,
+		`DELETE FROM personal_access_tokens WHERE revoked_at IS NOT NULL AND revoked_at < $1`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete revoked tokens: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // TouchLastUsed is best-effort bookkeeping; callers ignore the error.
 func (r *TokenRepository) TouchLastUsed(ctx context.Context, tokenID string) error {
 	_, err := r.pool.Exec(ctx,

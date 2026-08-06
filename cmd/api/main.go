@@ -30,6 +30,7 @@ import (
 	"github.com/treant-dev/cram-go/internal/db"
 	_ "github.com/treant-dev/cram-go/docs"
 	"github.com/treant-dev/cram-go/internal/handler"
+	mcpserver "github.com/treant-dev/cram-go/internal/mcp"
 	apimiddleware "github.com/treant-dev/cram-go/internal/middleware"
 	"github.com/treant-dev/cram-go/internal/repository"
 	"github.com/treant-dev/cram-go/internal/seed"
@@ -198,6 +199,18 @@ func main() {
 		r.Delete("/account/tokens/{tokenID}", tokensHandler.Revoke)
 		r.Post("/collections/{collectionID}/share", shareHandler.Generate)
 		r.Delete("/collections/{collectionID}/share", shareHandler.Revoke)
+	})
+
+	// MCP endpoint. Authenticated by personal access token only — deliberately not
+	// RequireAuth, which falls back to the `jwt` cookie this host also receives.
+	mcpHandler := mcpserver.Handler(mcpserver.Deps{Collections: cardSvc})
+	r.Group(func(r chi.Router) {
+		r.Use(apimiddleware.RequireToken(tokenSvc))
+		r.Use(httprate.Limit(60, time.Minute, httprate.WithKeyFuncs(func(r *http.Request) (string, error) {
+			return apimiddleware.TokenID(r), nil
+		})))
+		r.Handle("/mcp", mcpHandler)
+		r.Handle("/mcp/*", mcpHandler)
 	})
 
 	r.Group(func(r chi.Router) {

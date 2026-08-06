@@ -85,7 +85,9 @@ func main() {
 	itemProgressRepo := repository.NewItemProgressRepository(pool)
 	itemEventRepo := repository.NewItemEventRepository(pool)
 	itemDraftRepo := repository.NewItemDraftRepository(pool)
+	tokenRepo := repository.NewTokenRepository(pool)
 	cardSvc := service.NewCollectionService(collectionRepo, followRepo, userRepo, itemRepo, itemProgressRepo, itemEventRepo, itemDraftRepo)
+	tokenSvc := service.NewTokenService(tokenRepo)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -132,6 +134,7 @@ func main() {
 	adminHandler := handler.NewAdminHandler(cardSvc)
 	accountHandler := handler.NewAccountHandler(cardSvc)
 	shareHandler := handler.NewShareHandler(cardSvc)
+	tokensHandler := handler.NewTokensHandler(tokenSvc)
 	aiHandler := handler.NewAIHandler()
 
 	s3Store, s3Err := storage.NewS3Store()
@@ -187,6 +190,12 @@ func main() {
 		r.Get("/collections/{collectionID}/blitz", blitzHandler.Get)
 		r.With(httprate.LimitByIP(30, time.Minute)).Post("/upload", uploadHandler.Upload)
 		r.Delete("/account", accountHandler.Delete)
+
+		// Personal access tokens are managed from a browser session only — never with a
+		// token itself, or a leaked token could mint replacements for its own revocation.
+		r.Post("/account/tokens", tokensHandler.Create)
+		r.Get("/account/tokens", tokensHandler.List)
+		r.Delete("/account/tokens/{tokenID}", tokensHandler.Revoke)
 		r.Post("/collections/{collectionID}/share", shareHandler.Generate)
 		r.Delete("/collections/{collectionID}/share", shareHandler.Revoke)
 	})

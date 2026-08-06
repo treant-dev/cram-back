@@ -26,6 +26,26 @@ const (
 	maxClientNameLen = 100
 )
 
+// resolveScope reads an OAuth scope parameter, which is a space-delimited set — not a single
+// value. We advertise both "read" and "read_write" in scopes_supported, so a client asking for
+// everything it saw sends "read read_write"; rejecting that means rejecting our own advertisement.
+//
+// Unknown entries are ignored rather than refused: a client that also asks for "openid" or
+// "profile" is asking for something we simply do not have, which is not a reason to refuse the
+// registration. The widest requested Cram scope wins, and nothing recognisable means read.
+func resolveScope(requested string) string {
+	widest := ""
+	for _, s := range strings.Fields(requested) {
+		switch s {
+		case model.ScopeReadWrite:
+			return model.ScopeReadWrite
+		case model.ScopeRead:
+			widest = model.ScopeRead
+		}
+	}
+	return widest
+}
+
 var (
 	ErrOAuthInvalidClient   = errors.New("unknown client")
 	ErrOAuthInvalidRedirect = errors.New("redirect_uri does not match a registered one")
@@ -91,11 +111,9 @@ func (s *OAuthService) RegisterClient(ctx context.Context, name string, redirect
 			return nil, err
 		}
 	}
+	scope = resolveScope(scope)
 	if scope == "" {
 		scope = model.ScopeRead
-	}
-	if scope != model.ScopeRead && scope != model.ScopeReadWrite {
-		return nil, ErrInvalidScope
 	}
 
 	id, err := randomToken("cram_client_")
@@ -183,11 +201,12 @@ func (s *OAuthService) ValidateAuthorize(ctx context.Context, clientID, redirect
 	if len(codeChallenge) < 43 {
 		return nil, fmt.Errorf("%w: code_challenge is missing or too short", ErrOAuthInvalidRequest)
 	}
-	if scope == "" {
+	// Same list handling as at registration. An authorize request asking only for scopes we do
+	// not have falls back to what the client registered with, rather than failing the flow.
+	if resolved := resolveScope(scope); resolved != "" {
+		scope = resolved
+	} else {
 		scope = client.Scope
-	}
-	if scope != model.ScopeRead && scope != model.ScopeReadWrite {
-		return nil, ErrInvalidScope
 	}
 
 	return &AuthorizeRequest{

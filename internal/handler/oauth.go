@@ -113,7 +113,9 @@ func (h *OAuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"client_id":                  client.ID,
+		"client_id": client.ID,
+		// RFC 7591 says SHOULD, and some clients treat its absence as a malformed response.
+		"client_id_issued_at":        client.CreatedAt.Unix(),
 		"client_name":                client.Name,
 		"redirect_uris":              client.RedirectURIs,
 		"scope":                      client.Scope,

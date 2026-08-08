@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/treant-dev/cram-go/internal/itemimport"
@@ -34,6 +35,7 @@ type itemInput struct {
 
 	Term       string `json:"term,omitempty" jsonschema:"card: the prompt side — the word or question being learned."`
 	Definition string `json:"definition,omitempty" jsonschema:"card: the answer side — the translation, meaning or explanation."`
+	Hint       string `json:"hint,omitempty" jsonschema:"card: optional guidance the learner can reveal while studying — a mnemonic, a warning about an irregular form. It must not simply repeat the definition, or revealing it gives the answer away."`
 
 	Question string        `json:"question,omitempty" jsonschema:"quiz: the question text."`
 	Options  []optionInput `json:"options,omitempty" jsonschema:"quiz: at least two options, at least one with correct=true."`
@@ -49,6 +51,24 @@ type createCollectionInput struct {
 	Description string      `json:"description,omitempty"`
 	IsPublic    bool        `json:"is_public,omitempty"`
 	Items       []itemInput `json:"items,omitempty" jsonschema:"Initial items, published immediately. A collection may mix cards, quizzes and exercises."`
+}
+
+type updateCollectionInput struct {
+	CollectionID string  `json:"collection_id"`
+	Title        *string `json:"title,omitempty" jsonschema:"New title. Omit to leave it unchanged."`
+	Description  *string `json:"description,omitempty" jsonschema:"New description. Omit to leave it unchanged."`
+	IsPublic     *bool   `json:"is_public,omitempty" jsonschema:"Whether the collection is publicly listed. Omit to leave it unchanged."`
+}
+
+type updateItemInput struct {
+	CollectionID string    `json:"collection_id"`
+	ItemID       string    `json:"item_id" jsonschema:"The id of the item to replace, from get_collection or get_draft."`
+	Item         itemInput `json:"item" jsonschema:"The item's complete new content. This REPLACES the old one — read the item first and resend every field you want to keep, or anything you leave out is gone."`
+}
+
+type itemRefInput struct {
+	CollectionID string `json:"collection_id"`
+	ItemID       string `json:"item_id" jsonschema:"The id of the item, from get_collection or get_draft. Never guess it from the text."`
 }
 
 type addItemsInput struct {
@@ -93,6 +113,34 @@ func (s *session) addWriteTools(srv *sdk.Server) {
 	}, s.stageItems)
 
 	sdk.AddTool(srv, &sdk.Tool{
+		Name: "update_collection",
+		Description: "Rename a collection, change its description, or make it public or private. " +
+			"Only the fields you pass are changed; the collection's items are untouched.",
+	}, s.updateCollection)
+
+	sdk.AddTool(srv, &sdk.Tool{
+		Name: "update_item",
+		Description: "Replace one item's content. Read it first with get_collection or get_draft and " +
+			"resend the whole thing, including the parts you are not changing: this overwrites rather " +
+			"than merges, so a field you leave out is erased. Like stage_items, the change is staged — " +
+			"the user sees it only after publish_draft.",
+	}, s.updateItem)
+
+	sdk.AddTool(srv, &sdk.Tool{
+		Name: "delete_item",
+		Description: "Delete one item by its id, which you must have read from get_collection or " +
+			"get_draft — never match it by its text. The deletion is staged: it takes effect on " +
+			"publish_draft, and discard_draft undoes it.",
+	}, s.deleteItem)
+
+	sdk.AddTool(srv, &sdk.Tool{
+		Name: "delete_collection",
+		Description: "Permanently delete a collection and everything in it. This cannot be undone and " +
+			"is not staged — unlike delete_item, there is no draft to discard afterwards. Confirm with " +
+			"the user first; the result reports how many items went with it.",
+	}, s.deleteCollection)
+
+	sdk.AddTool(srv, &sdk.Tool{
 		Name: "publish_draft",
 		Description: "Publish everything staged for a collection, making it the live version. " +
 			"Call get_draft_changes first if the user has not seen what is pending.",
@@ -125,7 +173,7 @@ func buildItems(in []itemInput) ([]service.ImportItem, error) {
 	out := make([]service.ImportItem, 0, len(in))
 	for i, it := range in {
 		entry := itemimport.Entry{
-			Type: it.Type, Term: it.Term, Definition: it.Definition,
+			Type: it.Type, Term: it.Term, Definition: it.Definition, Hint: it.Hint,
 			Question: it.Question, Kind: it.Kind, Title: it.Title, Distractors: it.Distractors,
 		}
 		for _, o := range it.Options {
@@ -151,6 +199,49 @@ func (s *session) stagedCount(ctx context.Context, collectionID string) int {
 		return 0
 	}
 	return len(diff.Entries)
+}
+
+// str reads a string out of JSONB content, where every value is an `any`.
+func str(v any) string { s, _ := v.(string); return s }
+
+// describeItem names an item the way the tools' own schema does: a quiz is a "quiz", even though
+// it is stored as an exercise.
+func describeItem(itemType, kind string) string {
+	if itemType == "exercise" && kind != "" {
+		if kind == "quiz" {
+			return "quiz"
+		}
+		return kind + " exercise"
+	}
+	return itemType
+}
+
+// draftContent turns a validated import item into the JSONB body the draft API stores. Only the
+// top-level kinds are editable this way: a sentence belongs to its exercise and is replaced by
+// replacing the exercise.
+func draftContent(it service.ImportItem) (map[string]any, string, error) {
+	switch it.Type {
+	case "card":
+		content := map[string]any{"term": it.Card.Term, "definition": it.Card.Definition, "image": it.Card.Image}
+		if it.Card.Hint != "" {
+			content["hint"] = it.Card.Hint
+		}
+		return content, "card", nil
+	case "quiz":
+		opts := make([]any, 0, len(it.Quiz.Options))
+		for _, o := range it.Quiz.Options {
+			opts = append(opts, map[string]any{"text": o.Text, "is_correct": o.IsCorrect, "explanation": o.Explanation})
+		}
+		return map[string]any{"kind": "quiz", "question": it.Quiz.Question, "options": opts}, "exercise", nil
+	case "exercise":
+		// A bank or choice exercise carries its sentences as child items, which this tool cannot
+		// rewrite in one call — say so rather than silently updating the heading alone.
+		return nil, "", errors.New(
+			"editing a fill-in-the-blank exercise in place is not supported yet, because its sentences are " +
+				"separate items; delete it and add a replacement")
+	default:
+		return nil, "", fmt.Errorf("cannot edit an item of type %q", it.Type)
+	}
 }
 
 // ---------- handlers ----------
@@ -247,6 +338,148 @@ func (s *session) stageItems(ctx context.Context, _ *sdk.CallToolRequest, in add
 				"unfinished edits; publishing will release those too. get_draft_changes shows everything pending.", before)
 	}
 	return nil, res, nil
+}
+
+func (s *session) updateCollection(ctx context.Context, _ *sdk.CallToolRequest, in updateCollectionInput) (*sdk.CallToolResult, writeResult, error) {
+	if err := s.requireWrite(); err != nil {
+		return nil, writeResult{}, err
+	}
+	if in.CollectionID == "" {
+		return nil, writeResult{}, errors.New("collection_id is required; call list_collections to find it")
+	}
+	if in.Title == nil && in.Description == nil && in.IsPublic == nil {
+		return nil, writeResult{}, errors.New("nothing to change: pass title, description or is_public")
+	}
+
+	// Unlike an item, a collection is updated field by field: it has three independent
+	// attributes and a caller normally means to touch one. The service takes all three, so the
+	// current values fill in whatever was not passed.
+	col, err := s.deps.Collections.GetCollection(ctx, in.CollectionID, s.userID, false)
+	if err != nil {
+		return nil, writeResult{}, toolErr(err)
+	}
+	if col.UserID != s.userID {
+		return nil, writeResult{}, errors.New("that collection belongs to someone else")
+	}
+	title, description, isPublic := col.Title, col.Description, col.IsPublic
+	if in.Title != nil {
+		if strings.TrimSpace(*in.Title) == "" {
+			return nil, writeResult{}, errors.New("title cannot be empty")
+		}
+		title = *in.Title
+	}
+	if in.Description != nil {
+		description = *in.Description
+	}
+	if in.IsPublic != nil {
+		isPublic = *in.IsPublic
+	}
+
+	updated, err := s.deps.Collections.UpdateCollection(ctx, in.CollectionID, s.userID, title, description, isPublic)
+	if err != nil {
+		return nil, writeResult{}, toolErr(err)
+	}
+	return nil, writeResult{
+		CollectionID: in.CollectionID,
+		Published:    true,
+		Message:      fmt.Sprintf("Updated %q. Its items are unchanged.", updated.Title),
+	}, nil
+}
+
+func (s *session) updateItem(ctx context.Context, _ *sdk.CallToolRequest, in updateItemInput) (*sdk.CallToolResult, writeResult, error) {
+	if err := s.requireWrite(); err != nil {
+		return nil, writeResult{}, err
+	}
+	if in.CollectionID == "" || in.ItemID == "" {
+		return nil, writeResult{}, errors.New("collection_id and item_id are both required")
+	}
+
+	// Refuse an id that does not exist rather than letting StageDraftItem create a new item
+	// under it: a typo would silently add content instead of editing any.
+	existing, err := s.deps.Collections.GetItem(ctx, in.CollectionID, s.userID, in.ItemID)
+	if err != nil {
+		return nil, writeResult{}, errors.New("no such item in that collection; read its id from get_collection or get_draft")
+	}
+
+	built, err := buildItems([]itemInput{in.Item})
+	if err != nil {
+		return nil, writeResult{}, err
+	}
+	content, itemType, err := draftContent(built[0])
+	if err != nil {
+		return nil, writeResult{}, err
+	}
+	// Report the mismatch in the vocabulary the caller writes ("quiz"), not the storage type it
+	// maps to ("exercise"), or the message reads as a contradiction of what they just sent.
+	if existing.Type != itemType || (itemType == "exercise" && str(existing.Content["kind"]) != str(content["kind"])) {
+		return nil, writeResult{}, fmt.Errorf(
+			"that item is a %s and the replacement is a %s; an item cannot change type — delete it and add a new one",
+			describeItem(existing.Type, str(existing.Content["kind"])), in.Item.Type)
+	}
+
+	if _, err := s.deps.Collections.StageDraftItem(ctx, in.CollectionID, s.userID, in.ItemID,
+		service.DraftItemInput{Type: itemType, ParentID: existing.ParentID, Content: content}); err != nil {
+		return nil, writeResult{}, toolErr(err)
+	}
+	return nil, writeResult{
+		CollectionID: in.CollectionID,
+		Added:        1,
+		Published:    false,
+		Message: "Replaced the item in the draft. The user will NOT see the change until the draft is " +
+			"published — call publish_draft, or discard_draft to undo it.",
+	}, nil
+}
+
+func (s *session) deleteItem(ctx context.Context, _ *sdk.CallToolRequest, in itemRefInput) (*sdk.CallToolResult, writeResult, error) {
+	if err := s.requireWrite(); err != nil {
+		return nil, writeResult{}, err
+	}
+	if in.CollectionID == "" || in.ItemID == "" {
+		return nil, writeResult{}, errors.New("collection_id and item_id are both required")
+	}
+	item, err := s.deps.Collections.GetItem(ctx, in.CollectionID, s.userID, in.ItemID)
+	if err != nil {
+		return nil, writeResult{}, errors.New("no such item in that collection; read its id from get_collection or get_draft")
+	}
+	if err := s.deps.Collections.StageDraftDelete(ctx, in.CollectionID, s.userID, in.ItemID); err != nil {
+		return nil, writeResult{}, toolErr(err)
+	}
+
+	msg := fmt.Sprintf("Staged the deletion of one %s. It is still visible to the user until publish_draft; "+
+		"discard_draft undoes it.", item.Type)
+	// An exercise owns its sentences, so deleting it takes them with it — worth saying, since the
+	// caller only named one item.
+	if item.Type == "exercise" {
+		msg += " Deleting an exercise removes its sentences too."
+	}
+	return nil, writeResult{CollectionID: in.CollectionID, Published: false, Message: msg}, nil
+}
+
+func (s *session) deleteCollection(ctx context.Context, _ *sdk.CallToolRequest, in collectionIDInput) (*sdk.CallToolResult, writeResult, error) {
+	if err := s.requireWrite(); err != nil {
+		return nil, writeResult{}, err
+	}
+	if in.CollectionID == "" {
+		return nil, writeResult{}, errors.New("collection_id is required")
+	}
+	col, err := s.deps.Collections.GetCollection(ctx, in.CollectionID, s.userID, false)
+	if err != nil {
+		return nil, writeResult{}, toolErr(err)
+	}
+	if col.UserID != s.userID {
+		return nil, writeResult{}, errors.New("that collection belongs to someone else")
+	}
+	items := len(col.Items)
+
+	if err := s.deps.Collections.DeleteCollection(ctx, in.CollectionID, s.userID); err != nil {
+		return nil, writeResult{}, toolErr(err)
+	}
+	return nil, writeResult{
+		CollectionID: in.CollectionID,
+		Published:    true,
+		Message: fmt.Sprintf("Deleted %q and its %d item(s), along with any study progress. This cannot be undone.",
+			col.Title, items),
+	}, nil
 }
 
 func (s *session) publishDraft(ctx context.Context, _ *sdk.CallToolRequest, in collectionIDInput) (*sdk.CallToolResult, writeResult, error) {

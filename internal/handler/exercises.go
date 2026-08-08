@@ -166,6 +166,7 @@ type importItem struct {
 	Type       string `yaml:"type"`
 	Term       string `yaml:"term"`       // card front (canonical; matches the model/UI)
 	Definition string `yaml:"definition"` // card back  (canonical)
+	Hint       string `yaml:"hint"`       // card only: optional guidance shown on request
 	Question   string `yaml:"question"`   // quiz question; also accepted as a card-front alias
 	Answer     string `yaml:"answer"`     // card back alias (back-compat)
 	Options    []struct {
@@ -206,7 +207,7 @@ func (h *CardsHandler) ImportItems(w http.ResponseWriter, r *http.Request) {
 	skipped, sentenceCount := 0, 0
 	for _, it := range parsed {
 		entry := itemimport.Entry{
-			Type: it.Type, Term: it.Term, Definition: firstNonEmpty(it.Definition, it.Answer),
+			Type: it.Type, Term: it.Term, Definition: firstNonEmpty(it.Definition, it.Answer), Hint: it.Hint,
 			Question: it.Question, Kind: it.Kind, Title: it.Title, Distractors: it.Distractors,
 		}
 		for _, o := range it.Options {

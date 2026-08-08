@@ -51,6 +51,7 @@ type Entry struct {
 	// card
 	Term       string
 	Definition string
+	Hint       string
 
 	// quiz
 	Question string
@@ -125,7 +126,7 @@ func BuildItem(e Entry) (service.ImportItem, error) {
 		if term == "" || def == "" {
 			return service.ImportItem{}, fmt.Errorf("card needs both a term and a definition")
 		}
-		return service.ImportItem{Type: "card", Card: &model.Card{Term: term, Definition: def}}, nil
+		return service.ImportItem{Type: "card", Card: &model.Card{Term: term, Definition: def, Hint: strings.TrimSpace(e.Hint)}}, nil
 
 	case "quiz":
 		question := strings.TrimSpace(e.Question)

@@ -7,10 +7,13 @@ import "time"
 //
 // Content shapes by Type (validated in app code, not by columns):
 //
-//	card     : {"term","definition","image"?}
+//	card     : {"term","definition","image"?,"hint"?}
 //	test     : {"question","options":[{"text","is_correct","explanation"?}],"image"?}
 //	exercise : {"kind":"bank"|"choice","title","distractors":[...]}
-//	sentence : {"text","answer":[...],"distractors":[...]?,"hint"?}   (ParentID → exercise)
+//	sentence : {"text","answer":[...],"distractors":[...]?}   (ParentID → exercise)
+//
+// A sentence carried a "hint" in the pre-items schema; nothing has written or read one since,
+// so it is not listed above. Only cards have hints.
 type Item struct {
 	ID           string
 	Type         string

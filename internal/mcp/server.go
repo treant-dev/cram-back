@@ -149,7 +149,7 @@ type itemOut struct {
 	ID       string         `json:"id"`
 	Type     string         `json:"type" jsonschema:"card, exercise or sentence. A sentence belongs to the exercise named by parent_id."`
 	ParentID string         `json:"parent_id,omitempty"`
-	Content  map[string]any `json:"content" jsonschema:"Type-specific body. card: term, definition. exercise: kind (bank|choice|quiz), title, and for quiz also question and options. sentence: text with ___ blanks, answer (one word per blank)."`
+	Content  map[string]any `json:"content" jsonschema:"Type-specific body. card: term, definition, and hint when the card has one. exercise: kind (bank|choice|quiz), title, and for quiz also question and options. sentence: text with ___ blanks, answer (one word per blank)."`
 }
 
 type listCollectionsOutput struct {

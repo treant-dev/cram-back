@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -858,9 +859,12 @@ func cardContent(term, definition, image, hint string) map[string]any {
 	if image != "" {
 		c["image"] = image
 	}
-	// Omitted when empty so an item's content stays the shape it was written in, rather than
-	// accumulating empty keys for every optional field ever added.
-	if hint != "" {
+	// Trimmed here rather than at each caller: this is the one choke point every write path
+	// goes through, and it is what makes the emptiness test below mean "no hint" instead of
+	// "no hint, unless someone typed a space". Omitted when empty so an item's content stays
+	// the shape it was written in, rather than accumulating empty keys for every optional
+	// field ever added.
+	if hint = strings.TrimSpace(hint); hint != "" {
 		c["hint"] = hint
 	}
 	return c

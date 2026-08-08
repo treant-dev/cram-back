@@ -182,10 +182,10 @@ func (h *CardsHandler) GetOrCreateDraft(w http.ResponseWriter, r *http.Request) 
 // @Router       /collections/{collectionID}/draft [put]
 func (h *CardsHandler) UpdateDraft(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title         string `json:"title"`
-		Description   string `json:"description"`
-		IsPublic      bool   `json:"is_public"`
-		Cards         []struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		IsPublic    bool   `json:"is_public"`
+		Cards       []struct {
 			ID         string `json:"id"`
 			Term       string `json:"term"`
 			Definition string `json:"definition"`
@@ -522,8 +522,8 @@ func (h *CardsHandler) AddCard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if len(body.Term) > maxFieldLen || len(body.Definition) > maxFieldLen {
-		http.Error(w, "term or definition too long", http.StatusBadRequest)
+	if len(body.Term) > maxFieldLen || len(body.Definition) > maxFieldLen || len(body.Hint) > maxFieldLen {
+		http.Error(w, "term, definition or hint too long", http.StatusBadRequest)
 		return
 	}
 	card, err := h.svc.AddCard(r.Context(), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Term, body.Definition, body.Image, body.Hint, body.Position)
@@ -558,8 +558,8 @@ func (h *CardsHandler) UpdateCard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if len(body.Term) > maxFieldLen || len(body.Definition) > maxFieldLen {
-		http.Error(w, "term or definition too long", http.StatusBadRequest)
+	if len(body.Term) > maxFieldLen || len(body.Definition) > maxFieldLen || len(body.Hint) > maxFieldLen {
+		http.Error(w, "term, definition or hint too long", http.StatusBadRequest)
 		return
 	}
 	card, err := h.svc.UpdateCard(r.Context(), chi.URLParam(r, "cardID"), chi.URLParam(r, "collectionID"), h.claims(r).UserID, body.Term, body.Definition, body.Image, body.Hint, body.Position)

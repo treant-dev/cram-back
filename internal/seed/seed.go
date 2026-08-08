@@ -32,13 +32,30 @@ func mustJSON(v any) []byte {
 	return b
 }
 
+// seedCard is one card of seed data. Hint is optional — deliberately absent from most
+// cards, so a stand shows both shapes: with a hint to reveal and without.
+type seedCard struct {
+	Term       string
+	Definition string
+	Hint       string
+}
+
+// cardContent mirrors service.cardContent: the hint key exists only when there is a hint.
+func cardContent(c seedCard) map[string]any {
+	m := map[string]any{"term": c.Term, "definition": c.Definition}
+	if c.Hint != "" {
+		m["hint"] = c.Hint
+	}
+	return m
+}
+
 // insertCardItems adds card items to a collection, ranked in order.
-func insertCardItems(ctx context.Context, pool *pgxpool.Pool, colID string, cards [][2]string) error {
+func insertCardItems(ctx context.Context, pool *pgxpool.Pool, colID string, cards []seedCard) error {
 	keys := rank.Sequence(len(cards))
 	for i, c := range cards {
 		if _, err := pool.Exec(ctx,
 			`INSERT INTO items (type, collection_id, content, rank) VALUES ('card', $1, $2, $3)`,
-			colID, mustJSON(map[string]any{"term": c[0], "definition": c[1]}), keys[i],
+			colID, mustJSON(cardContent(c)), keys[i],
 		); err != nil {
 			return fmt.Errorf("insert card item: %w", err)
 		}
@@ -92,12 +109,12 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 		return "", fmt.Errorf("create collection: %w", err)
 	}
 
-	cards := [][2]string{
-		{"What is a goroutine?", "A lightweight thread managed by the Go runtime"},
-		{"What does defer do?", "Schedules a function to run when the surrounding function returns"},
-		{"What is a channel?", "A typed conduit for sending and receiving values between goroutines"},
-		{"Zero value of a pointer?", "nil"},
-		{"Which keyword starts a goroutine?", "go"},
+	cards := []seedCard{
+		{Term: "What is a goroutine?", Definition: "A lightweight thread managed by the Go runtime", Hint: "Starts with a couple of kilobytes of stack, so thousands of them are ordinary."},
+		{Term: "What does defer do?", Definition: "Schedules a function to run when the surrounding function returns", Hint: "Think of closing a file on the line right after you opened it."},
+		{Term: "What is a channel?", Definition: "A typed conduit for sending and receiving values between goroutines", Hint: "Its type can carry a direction: chan<- sends, <-chan receives."},
+		{Term: "Zero value of a pointer?", Definition: "nil", Hint: "The same value an uninitialised map, slice or interface holds."},
+		{Term: "Which keyword starts a goroutine?", Definition: "go"},
 	}
 	questions := []struct {
 		q    string
@@ -112,7 +129,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 	for i, c := range cards {
 		if _, err = pool.Exec(ctx,
 			`INSERT INTO items (type, collection_id, content, rank) VALUES ('card', $1, $2, $3)`,
-			colID, mustJSON(map[string]any{"term": c[0], "definition": c[1]}), keys[i],
+			colID, mustJSON(cardContent(c)), keys[i],
 		); err != nil {
 			return "", fmt.Errorf("insert card item: %w", err)
 		}
@@ -161,14 +178,14 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 	).Scan(&privateColID); err != nil {
 		return "", fmt.Errorf("create private collection: %w", err)
 	}
-	if err = insertCardItems(ctx, pool, privateColID, [][2]string{
-		{"Secret key 1", "Secret answer 1"},
-		{"Secret key 2", "Secret answer 2"},
+	if err = insertCardItems(ctx, pool, privateColID, []seedCard{
+		{Term: "Secret key 1", Definition: "Secret answer 1"},
+		{Term: "Secret key 2", Definition: "Secret answer 2"},
 	}); err != nil {
 		return "", err
 	}
 
-	if err = seedExtraUsers(ctx, pool); err != nil {
+	if err = seedExtraUsers(ctx, pool, userID); err != nil {
 		return "", err
 	}
 
@@ -176,12 +193,53 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (userID string, err error) {
 	return userID, nil
 }
 
-func seedExtraUsers(ctx context.Context, pool *pgxpool.Pool) error {
+// seedExtraUsers fills the other accounts. devUserID is the dev user from Run: collections
+// marked followed show up on their home page, which is the only way to see a followed
+// collection without clicking through the public list first.
+
+// englishVocabulary is a dictionary-shaped deck: a word and what it means, the way a learner
+// would actually write one. Hints are on the words whose trap is spelling or a false friend,
+// not on every card — a hint on all of them would say nothing.
+var englishVocabulary = []seedCard{
+	{Term: "abundant", Definition: "Present in great quantity; more than enough"},
+	{Term: "adamant", Definition: "Refusing to be persuaded or to change one's mind", Hint: "Named after a legendary unbreakable stone."},
+	{Term: "ambiguous", Definition: "Open to more than one interpretation"},
+	{Term: "benevolent", Definition: "Well meaning and kindly", Hint: "Latin bene = well; the opposite starts with mal-."},
+	{Term: "candid", Definition: "Truthful and straightforward, even when it is awkward"},
+	{Term: "coherent", Definition: "Logical and consistent; holding together"},
+	{Term: "concise", Definition: "Saying much in few words"},
+	{Term: "diligent", Definition: "Showing steady, careful effort in what one does"},
+	{Term: "eloquent", Definition: "Fluent and persuasive in speech or writing"},
+	{Term: "eminent", Definition: "Famous and respected within a profession", Hint: "Not imminent, which is about time, not standing."},
+	{Term: "feasible", Definition: "Possible to do easily or conveniently"},
+	{Term: "frugal", Definition: "Sparing with money or food; not wasteful"},
+	{Term: "gregarious", Definition: "Fond of company; sociable"},
+	{Term: "hesitant", Definition: "Slow to act or speak through doubt"},
+	{Term: "impartial", Definition: "Treating all sides equally; not favouring one"},
+	{Term: "inevitable", Definition: "Certain to happen; unavoidable"},
+	{Term: "intricate", Definition: "Very complicated or detailed"},
+	{Term: "lucid", Definition: "Clear and easy to understand; thinking clearly"},
+	{Term: "meticulous", Definition: "Showing great attention to detail; very careful"},
+	{Term: "notorious", Definition: "Famous for something bad", Hint: "Fame with a bad smell — never a compliment."},
+	{Term: "obsolete", Definition: "No longer produced or used; out of date"},
+	{Term: "plausible", Definition: "Seeming reasonable or probable"},
+	{Term: "prudent", Definition: "Acting with care and thought for the future"},
+	{Term: "reluctant", Definition: "Unwilling and hesitant to do something"},
+	{Term: "resilient", Definition: "Able to recover quickly from difficulty"},
+	{Term: "scarce", Definition: "Insufficient for the demand; hard to find"},
+	{Term: "tedious", Definition: "Too long, slow or dull; tiresome"},
+	{Term: "tentative", Definition: "Not certain or fixed; provisional"},
+	{Term: "versatile", Definition: "Able to adapt to many different functions"},
+	{Term: "vivid", Definition: "Producing powerful, clear images in the mind"},
+}
+
+func seedExtraUsers(ctx context.Context, pool *pgxpool.Pool, devUserID string) error {
 	type col struct {
 		title    string
 		desc     string
 		isPublic bool
-		cards    [][2]string
+		followed bool // the dev user follows it
+		cards    []seedCard
 	}
 	extras := []struct {
 		googleID string
@@ -193,27 +251,33 @@ func seedExtraUsers(ctx context.Context, pool *pgxpool.Pool) error {
 		{
 			googleID: "seed_user_alice", email: "alice@example.com", name: "Alice Smith", role: "user",
 			cols: []col{
-				{"French Vocabulary", "Basic French words", true, [][2]string{
-					{"Bonjour", "Hello"}, {"Merci", "Thank you"}, {"Au revoir", "Goodbye"},
+				{title: "French Vocabulary", desc: "Basic French words", isPublic: true, cards: []seedCard{
+					{Term: "Bonjour", Definition: "Hello", Hint: "Only until evening — after dark it turns into bonsoir."},
+					{Term: "Merci", Definition: "Thank you", Hint: "English borrowed it as 'mercy', from the same Latin root."},
+					{Term: "Au revoir", Definition: "Goodbye"},
 				}},
-				{"Alice's Private Deck", "Private study material", false, [][2]string{
-					{"Private card", "Private answer"},
+				{title: "Alice's Private Deck", desc: "Private study material", cards: []seedCard{
+					{Term: "Private card", Definition: "Private answer"},
 				}},
 			},
 		},
 		{
 			googleID: "seed_user_bob", email: "bob@example.com", name: "Bob Jones", role: "pro",
 			cols: []col{
-				{"Math Formulas", "Essential math formulas", true, [][2]string{
-					{"Area of a circle", "π × r²"},
-					{"Pythagorean theorem", "a² + b² = c²"},
-					{"Quadratic formula", "(-b ± √(b²-4ac)) / 2a"},
+				{title: "Math Formulas", desc: "Essential math formulas", isPublic: true, cards: []seedCard{
+					{Term: "Area of a circle", Definition: "π × r²", Hint: "Not the one with 2π — that measures the rim, not the inside."},
+					{Term: "Pythagorean theorem", Definition: "a² + b² = c²"},
+					{Term: "Quadratic formula", Definition: "(-b ± √(b²-4ac)) / 2a", Hint: "The classic mnemonic sings it to 'Pop Goes the Weasel'."},
 				}},
 			},
 		},
 		{
 			googleID: "seed_user_carol", email: "carol@example.com", name: "Carol White", role: "user",
-			cols: nil,
+			cols: []col{
+				// Long on purpose: the only seeded collection past one page, so paging, search
+				// and the mini-games have something bigger than a demo deck to work on.
+				{title: "English Vocabulary", desc: "A small dictionary: word and meaning", isPublic: true, followed: true, cards: englishVocabulary},
+			},
 		},
 	}
 
@@ -244,6 +308,14 @@ func seedExtraUsers(ctx context.Context, pool *pgxpool.Pool) error {
 			}
 			if err := insertCardItems(ctx, pool, colID, c.cards); err != nil {
 				return err
+			}
+			if c.followed {
+				if _, err := pool.Exec(ctx,
+					`INSERT INTO collection_follows (user_id, collection_id) VALUES ($1, $2)
+					 ON CONFLICT DO NOTHING`, devUserID, colID,
+				); err != nil {
+					return fmt.Errorf("follow %s as dev user: %w", c.title, err)
+				}
 			}
 		}
 		log.Printf("seed: extra user %s (%s)", u.name, uid)

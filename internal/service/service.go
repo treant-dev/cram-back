@@ -486,6 +486,34 @@ func (s *CollectionService) StageDraftItem(ctx context.Context, collectionID, us
 	return &model.Item{ID: itemID, Type: typ, CollectionID: &cid, ParentID: in.ParentID, Content: in.Content, Rank: rk}, nil
 }
 
+// GetItem returns one item of a collection the user owns, live or staged. Callers that replace an
+// item wholesale need to read it first, and doing that through GetCollection would mean shipping
+// the entire collection to find one row.
+func (s *CollectionService) GetItem(ctx context.Context, collectionID, userID, itemID string) (*model.Item, error) {
+	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
+		return nil, err
+	}
+	// A staged edit wins: it is what the item will be, and what an editor should see.
+	if d, err := s.itemDrafts.Get(ctx, itemID); err == nil && d != nil && d.CollectionID == collectionID {
+		if d.Op == "delete" {
+			return nil, ErrNotFound
+		}
+		it := model.Item{ID: d.ItemID, CollectionID: &collectionID, ParentID: d.ParentID, Content: d.Content}
+		if d.Type != nil {
+			it.Type = *d.Type
+		}
+		if d.Rank != nil {
+			it.Rank = *d.Rank
+		}
+		return &it, nil
+	}
+	live, err := s.items.Get(ctx, itemID, collectionID)
+	if err != nil || live == nil {
+		return nil, ErrNotFound
+	}
+	return live, nil
+}
+
 // StageDraftDelete stages a deletion. A live item gets a delete marker; a
 // draft-only addition is simply dropped from the draft.
 func (s *CollectionService) StageDraftDelete(ctx context.Context, collectionID, userID, itemID string) error {

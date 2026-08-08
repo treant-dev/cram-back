@@ -209,3 +209,19 @@ func TestCountSentences(t *testing.T) {
 		t.Error("card should count no sentences")
 	}
 }
+
+func TestCardHint(t *testing.T) {
+	got, err := BuildItem(Entry{Type: "card", Term: "der Löffel", Definition: "spoon", Hint: "  masculine  "})
+	if err != nil {
+		t.Fatalf("card with hint: %v", err)
+	}
+	if got.Card.Hint != "masculine" {
+		t.Errorf("hint = %q, want it trimmed", got.Card.Hint)
+	}
+
+	// A hint is optional; a card without one is still a card.
+	got, err = BuildItem(Entry{Type: "card", Term: "a", Definition: "b"})
+	if err != nil || got.Card.Hint != "" {
+		t.Errorf("card without a hint: %+v, %v", got.Card, err)
+	}
+}

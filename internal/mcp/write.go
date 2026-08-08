@@ -35,6 +35,7 @@ type itemInput struct {
 
 	Term       string `json:"term,omitempty" jsonschema:"card: the prompt side — the word or question being learned."`
 	Definition string `json:"definition,omitempty" jsonschema:"card: the answer side — the translation, meaning or explanation."`
+	Hint       string `json:"hint,omitempty" jsonschema:"card: optional guidance the learner can reveal while studying — a mnemonic, a warning about an irregular form. It must not simply repeat the definition, or revealing it gives the answer away."`
 
 	Question string        `json:"question,omitempty" jsonschema:"quiz: the question text."`
 	Options  []optionInput `json:"options,omitempty" jsonschema:"quiz: at least two options, at least one with correct=true."`
@@ -172,7 +173,7 @@ func buildItems(in []itemInput) ([]service.ImportItem, error) {
 	out := make([]service.ImportItem, 0, len(in))
 	for i, it := range in {
 		entry := itemimport.Entry{
-			Type: it.Type, Term: it.Term, Definition: it.Definition,
+			Type: it.Type, Term: it.Term, Definition: it.Definition, Hint: it.Hint,
 			Question: it.Question, Kind: it.Kind, Title: it.Title, Distractors: it.Distractors,
 		}
 		for _, o := range it.Options {
@@ -221,7 +222,11 @@ func describeItem(itemType, kind string) string {
 func draftContent(it service.ImportItem) (map[string]any, string, error) {
 	switch it.Type {
 	case "card":
-		return map[string]any{"term": it.Card.Term, "definition": it.Card.Definition, "image": it.Card.Image}, "card", nil
+		content := map[string]any{"term": it.Card.Term, "definition": it.Card.Definition, "image": it.Card.Image}
+		if it.Card.Hint != "" {
+			content["hint"] = it.Card.Hint
+		}
+		return content, "card", nil
 	case "quiz":
 		opts := make([]any, 0, len(it.Quiz.Options))
 		for _, o := range it.Quiz.Options {

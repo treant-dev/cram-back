@@ -125,3 +125,27 @@ func TestEditingToolsRequireIDs(t *testing.T) {
 		t.Error("delete_collection accepted an empty collection_id")
 	}
 }
+
+// A hint rides in the card's content, but only when there is one: an empty key on every card
+// would change the shape of items that never had one.
+func TestDraftContentCarriesHintOnlyWhenSet(t *testing.T) {
+	with, _, err := draftContent(service.ImportItem{
+		Type: "card", Card: &model.Card{Term: "der Löffel", Definition: "spoon", Hint: "masculine"},
+	})
+	if err != nil {
+		t.Fatalf("with hint: %v", err)
+	}
+	if with["hint"] != "masculine" {
+		t.Errorf("hint = %v, want it carried", with["hint"])
+	}
+
+	without, _, err := draftContent(service.ImportItem{
+		Type: "card", Card: &model.Card{Term: "a", Definition: "b"},
+	})
+	if err != nil {
+		t.Fatalf("without hint: %v", err)
+	}
+	if _, present := without["hint"]; present {
+		t.Error("an empty hint should not be written into content")
+	}
+}

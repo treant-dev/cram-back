@@ -62,6 +62,7 @@ type DraftCardInput struct {
 	Term       string
 	Definition string
 	Image      string
+	Hint       string
 }
 
 // DraftTestInput is accepted for API compatibility but ignored — tests are now quiz
@@ -401,7 +402,7 @@ func (s *CollectionService) UpdateDraft(ctx context.Context, collectionID, userI
 		return s.itemDrafts.Set(ctx, model.ItemDraft{ItemID: id, CollectionID: collectionID, Op: "upsert", Type: &t, Content: content, Rank: &rk})
 	}
 	for _, c := range req.Cards {
-		if err := stage(c.ID, "card", cardContent(c.Term, c.Definition, c.Image)); err != nil {
+		if err := stage(c.ID, "card", cardContent(c.Term, c.Definition, c.Image, c.Hint)); err != nil {
 			return err
 		}
 	}
@@ -663,7 +664,7 @@ func (s *CollectionService) StageImportCards(ctx context.Context, collectionID, 
 	}
 	for _, c := range cards {
 		prev = rank.After(prev)
-		if err := s.stageNewDraftItem(ctx, collectionID, "card", nil, cardContent(c.Term, c.Definition, c.Image), prev); err != nil {
+		if err := s.stageNewDraftItem(ctx, collectionID, "card", nil, cardContent(c.Term, c.Definition, c.Image, c.Hint), prev); err != nil {
 			return err
 		}
 	}
@@ -734,7 +735,7 @@ func (s *CollectionService) ImportItems(ctx context.Context, collectionID, userI
 		prev = rank.After(prev)
 		switch in.Type {
 		case "card":
-			if _, err := add("card", cardContent(in.Card.Term, in.Card.Definition, in.Card.Image), prev); err != nil {
+			if _, err := add("card", cardContent(in.Card.Term, in.Card.Definition, in.Card.Image, in.Card.Hint), prev); err != nil {
 				return imported, err
 			}
 		case "quiz":
@@ -852,10 +853,15 @@ func (s *CollectionService) ListUsers(ctx context.Context) ([]UserWithCollection
 // Cards
 
 // cardContent builds the JSONB body of a card item; image omitted when empty.
-func cardContent(term, definition, image string) map[string]any {
+func cardContent(term, definition, image, hint string) map[string]any {
 	c := map[string]any{"term": term, "definition": definition}
 	if image != "" {
 		c["image"] = image
+	}
+	// Omitted when empty so an item's content stays the shape it was written in, rather than
+	// accumulating empty keys for every optional field ever added.
+	if hint != "" {
+		c["hint"] = hint
 	}
 	return c
 }
@@ -869,6 +875,7 @@ func cardFromItem(it *model.Item) *model.Card {
 		Term:       str(it.Content["term"]),
 		Definition: str(it.Content["definition"]),
 		Image:      str(it.Content["image"]),
+		Hint:       str(it.Content["hint"]),
 		CreatedAt:  it.CreatedAt,
 		UpdatedAt:  it.UpdatedAt,
 	}
@@ -1023,7 +1030,7 @@ func sentenceContent(s model.ExerciseSentence) map[string]any {
 	return m
 }
 
-func (s *CollectionService) AddCard(ctx context.Context, collectionID, userID, term, definition, image string, position int) (*model.Card, error) {
+func (s *CollectionService) AddCard(ctx context.Context, collectionID, userID, term, definition, image, hint string, position int) (*model.Card, error) {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
@@ -1034,7 +1041,7 @@ func (s *CollectionService) AddCard(ctx context.Context, collectionID, userID, t
 	it, err := s.items.Create(ctx, model.Item{
 		Type:         "card",
 		CollectionID: &collectionID,
-		Content:      cardContent(term, definition, image),
+		Content:      cardContent(term, definition, image, hint),
 		Rank:         rank.After(last),
 	})
 	if err != nil {
@@ -1043,11 +1050,11 @@ func (s *CollectionService) AddCard(ctx context.Context, collectionID, userID, t
 	return cardFromItem(it), nil
 }
 
-func (s *CollectionService) UpdateCard(ctx context.Context, cardID, collectionID, userID, term, definition, image string, position int) (*model.Card, error) {
+func (s *CollectionService) UpdateCard(ctx context.Context, cardID, collectionID, userID, term, definition, image, hint string, position int) (*model.Card, error) {
 	if err := s.ownsCollection(ctx, collectionID, userID); err != nil {
 		return nil, err
 	}
-	it, err := s.items.Update(ctx, cardID, collectionID, cardContent(term, definition, image))
+	it, err := s.items.Update(ctx, cardID, collectionID, cardContent(term, definition, image, hint))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -1087,7 +1094,7 @@ func (s *CollectionService) ImportCards(ctx context.Context, collectionID, userI
 		if _, err := s.items.Create(ctx, model.Item{
 			Type:         "card",
 			CollectionID: &collectionID,
-			Content:      cardContent(c.Term, c.Definition, c.Image),
+			Content:      cardContent(c.Term, c.Definition, c.Image, c.Hint),
 			Rank:         prev,
 		}); err != nil {
 			return err

@@ -233,6 +233,32 @@ var englishVocabulary = []seedCard{
 	{Term: "vivid", Definition: "Producing powerful, clear images in the mind"},
 }
 
+// writingSystems is the deck the typing mini-game is exercised against. Its terms are chosen
+// for their *spelling*, not their meaning: each one is a case the on-screen keyboard has to
+// get right — letters QWERTY has no key for, a word split by a space, an apostrophe or a
+// hyphen the learner should not have to type, a card offering two accepted forms, and scripts
+// that have to abandon the QWERTY shape altogether. Deliberately short, so a seven-card round
+// covers most of it in one go.
+var writingSystems = []seedCard{
+	{Term: "der Löffel / Löffel", Definition: "The spoon — German, with the article", Hint: "Either form counts, and the blanks are drawn for the longer one."},
+	{Term: "die Straße", Definition: "The street — German", Hint: "The ß is a letter of its own, not a double s."},
+	{Term: "l'école", Definition: "The school — French", Hint: "The apostrophe is already written for you."},
+	{Term: "après-midi", Definition: "Afternoon — French"},
+	{Term: "el niño", Definition: "The boy — Spanish"},
+	{Term: "dziękuję", Definition: "Thank you — Polish"},
+	{Term: "ışık", Definition: "Light — Turkish", Hint: "Turkish keeps dotted and dotless i apart: ı is not i."},
+	{Term: "kuća", Definition: "House — Serbian, latinica"},
+	// Several cards per non-Latin script on purpose: the decoy keys are drawn from the other
+	// letters the deck uses in that same script, so a lone Cyrillic card would be offered its
+	// own letters and nothing else — the keyboard would spell the answer out.
+	{Term: "љубав", Definition: "Love — Serbian, ћирилица", Hint: "Written in the other of Serbian's two alphabets."},
+	{Term: "хвала", Definition: "Thank you — Serbian, ћирилица"},
+	{Term: "добро јутро", Definition: "Good morning — Serbian, ћирилица"},
+	{Term: "ευχαριστώ", Definition: "Thank you — Greek"},
+	{Term: "καλημέρα", Definition: "Good morning — Greek"},
+	{Term: "θάλασσα", Definition: "Sea — Greek"},
+}
+
 func seedExtraUsers(ctx context.Context, pool *pgxpool.Pool, devUserID string) error {
 	type col struct {
 		title    string
@@ -256,6 +282,9 @@ func seedExtraUsers(ctx context.Context, pool *pgxpool.Pool, devUserID string) e
 					{Term: "Merci", Definition: "Thank you", Hint: "English borrowed it as 'mercy', from the same Latin root."},
 					{Term: "Au revoir", Definition: "Goodbye"},
 				}},
+				// Followed by the dev user: it is a test fixture, so it should be one click from
+				// the home page rather than hunted for in the public list.
+				{title: "Writing Systems", desc: "Accents, umlauts, ćirilica and Greek — a workout for the typing keyboard", isPublic: true, followed: true, cards: writingSystems},
 				{title: "Alice's Private Deck", desc: "Private study material", cards: []seedCard{
 					{Term: "Private card", Definition: "Private answer"},
 				}},

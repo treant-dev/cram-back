@@ -1,9 +1,9 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"io"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -78,10 +78,17 @@ func (h *UploadHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Reassemble the full reader: prepend the already-read bytes.
-	full := io.MultiReader(bytes.NewReader(buf[:n]), file)
-	url, err := h.store.Upload(r.Context(), full, header.Size, contentType, ext)
+	// Rewind rather than stitching the sniffed bytes back on with a MultiReader: the S3 SDK
+	// checksums the body before sending it, and over plain HTTP it can only do that with a
+	// stream it can seek. A MultiReader failed every upload against the in-network MinIO.
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		log.Printf("upload: rewind: %v", err)
+		http.Error(w, "upload failed", http.StatusInternalServerError)
+		return
+	}
+	url, err := h.store.Upload(r.Context(), file, header.Size, contentType, ext)
 	if err != nil {
+		log.Printf("upload: %v", err)
 		http.Error(w, "upload failed", http.StatusInternalServerError)
 		return
 	}
